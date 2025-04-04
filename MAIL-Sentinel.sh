@@ -28,9 +28,9 @@
 #        export POSTFIX_REPORT_EMAIL="user@example.com"
 #        export OPENAI_API_KEY="your_openai_api_key"
 #   2. Run the script:
-#        ./postfix_error_report.sh
+#        ./MAIL-Sentinel.sh
 #   3. (Optional) To run as a cronjob, add a line similar to:
-#        0 * * * * /root/scripts/postfix_error_report/postfix_error_report.sh
+#        0 * * * * /root/scripts/MAIL-Sentinel/MAIL-Sentinel.sh
 #
 # Options:
 #   - send_immediately: Set to true to send an email immediately for each error instead

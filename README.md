@@ -26,11 +26,11 @@ export OPENAI_API_KEY="your_secure_openai_api_key"  # API key 🔑
 1. Ensure that `config.sh` exists and has the correct permissions.
 2. Run the script manually:
    ```bash
-   ./postfix_error_report.sh
+   ./MAIL-Sentinel.sh
    ```
 3. (Optional) To run as a cronjob, add a line similar to:
    ```cron
-   0 * * * * ~/scripts/postfix_error_report/postfix_error_report.sh
+   0 * * * * ~/scripts/MAIL-Sentinel/MAIL-Sentinel.sh
    ```
 
 ## Security Best Practices 🔒
