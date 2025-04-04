@@ -1,10 +1,10 @@
 #!/bin/bash
 # ###############################################################
-# M.A.I.L-Sentinel – My Artificial Intelligence Log Sentinel
+# M.A.I.L. Sentinel – My Artificial Intelligence Log Sentinel
 #
 # Description:
 #   Inspired by the need for a smarter, self-aware guardian over your Postfix logs,
-#   M.A.I.L-Sentinel was born. It's not just a log monitoring script—it’s an intelligent
+#   M.A.I.L. Sentinel was born. It's not just a log monitoring script—it's an intelligent
 #   guardian that scans, filters, and analyzes Postfix log data using AI to provide actionable
 #   recommendations on error resolution, ensuring your email infrastructure remains robust and secure.
 #

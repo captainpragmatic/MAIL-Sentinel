@@ -1,4 +1,4 @@
-# Contributing to M.A.I.L-Sentinel
+# Contributing to M.A.I.L. Sentinel
 
 Thank you for your interest in contributing!
 

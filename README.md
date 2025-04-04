@@ -1,6 +1,6 @@
-# ✨ M.A.I.L-Sentinel – My Artificial Intelligence Log Sentinel ✨
+# ✨ M.A.I.L. Sentinel – My Artificial Intelligence Log Sentinel ✨
 
-M.A.I.L-Sentinel is not just a log monitoring script; it’s an intelligent guardian created to scan, filter, and analyze Postfix log data. Inspired by the need for a smarter, self-aware sentinel over your email logs, M.A.I.L-Sentinel leverages AI to provide actionable recommendations for error resolution, ensuring your email infrastructure remains robust and secure.
+M.A.I.L. Sentinel is not just a log monitoring script; it’s an intelligent guardian created to scan, filter, and analyze Postfix log data. Inspired by the need for a smarter, self-aware sentinel over your email logs, M.A.I.L. Sentinel leverages AI to provide actionable recommendations for error resolution, ensuring your email infrastructure remains robust and secure.
 
 ## Requirements ✅
 
@@ -15,7 +15,7 @@ M.A.I.L-Sentinel is not just a log monitoring script; it’s an intelligent guar
 Create a secure configuration file (`config.sh`) in the project directory with your environment variables. For example:
 
 ```bash
-# Secure configuration file for the Postfix Error Report Script.
+# Secure configuration file for the M.A.I.L. Sentinel Script.
 # Ensure this file is only readable by the owner (e.g., chmod 600).
 export POSTFIX_REPORT_EMAIL="user@example.com"  # Recipient email ✉️
 export OPENAI_API_KEY="your_secure_openai_api_key"  # API key 🔑

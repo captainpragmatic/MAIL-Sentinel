@@ -1,5 +1,5 @@
 #!/bin/bash
-# Secure configuration file for M.A.I.L-Sentinel.
+# Secure configuration file for M.A.I.L. Sentinel.
 # Copy this file to config.sh and customize your environment variables.
 export POSTFIX_REPORT_EMAIL="user@example.com"  # Recipient email
 export OPENAI_API_KEY="your_secure_openai_api_key"  # API key
