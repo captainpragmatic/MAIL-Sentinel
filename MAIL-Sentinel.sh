@@ -97,6 +97,8 @@ get_fix_recommendation() {
         echo "Recommendation unavailable: API rate limit reached."
         return
     fi
+    
+    ((__get_fix_recommendation_api_call_count++))
 
     local prompt="Summarize the following Postfix error in a concise bullet-point list with three recommendations on how to fix, prevent, or ignore it (max 200 words): \"$error_summary\"."
 

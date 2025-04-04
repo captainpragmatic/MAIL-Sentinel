@@ -71,13 +71,13 @@ echo -e "${BOLD}Let's configure M.A.I.L. Sentinel:${NC}"
 
 # Email configuration
 echo -e "\n${BLUE}📧 Email Configuration${NC}"
-read -p "Enter the email address to receive reports: " email_address
+read -r -p "Enter the email address to receive reports: " email_address
 
 # OpenAI API Key configuration
 echo -e "\n${BLUE}🔑 OpenAI API Key Configuration${NC}"
 echo -e "You need a valid OpenAI API key to use M.A.I.L. Sentinel."
 echo -e "If you don't have one yet, visit: ${CYAN}https://platform.openai.com/api-keys${NC}"
-read -sp "Enter your OpenAI API key: " openai_key
+read -r -sp "Enter your OpenAI API key: " openai_key
 echo ""
 
 # Create the config.sh file
@@ -100,7 +100,7 @@ echo -e "${GREEN}✅ Configuration file created with secure permissions (600)!${
 # Cron job setup
 echo -e "\n${BLUE}⏰ Cron Job Setup${NC}"
 echo -e "Would you like to set up a cron job to run M.A.I.L. Sentinel automatically?"
-read -p "Set up cron job? (y/n): " setup_cron
+read -r -p "Set up cron job? (y/n): " setup_cron
 
 if [[ "$setup_cron" =~ ^[Yy]$ ]]; then
     echo -e "\nHow frequently would you like M.A.I.L. Sentinel to run?"
@@ -109,7 +109,7 @@ if [[ "$setup_cron" =~ ^[Yy]$ ]]; then
     echo -e "3) Daily"
     echo -e "4) Custom"
     
-    read -p "Enter your choice (1-4): " cron_choice
+    read -r -p "Enter your choice (1-4): " cron_choice
     
     case $cron_choice in
         1)
@@ -123,7 +123,7 @@ if [[ "$setup_cron" =~ ^[Yy]$ ]]; then
             ;;
         4)
             echo -e "Enter a custom cron expression:"
-            read -p "Cron expression: " cron_expression
+            read -r -p "Cron expression: " cron_expression
             ;;
         *)
             echo -e "${YELLOW}Invalid choice, defaulting to hourly.${NC}"
