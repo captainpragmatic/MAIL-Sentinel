@@ -1,0 +1,6 @@
+# Ignore secure configuration file
+config.sh
+
+# Ignore temporary and log files
+*.log
+tmp/

@@ -1,6 +1,6 @@
-# ✨ Postfix Error Report ✨
+# ✨ M.A.I.L-Sentinel – My Artificial Intelligence Log Sentinel ✨
 
-This bash script scans Postfix log files for specific error patterns and sends email notifications with an HTML report. 📈 For errors with multiple occurrences, it generates recommendations using the OpenAI API (with a rate limit of 5 API calls per execution). 🚀
+M.A.I.L-Sentinel is not just a log monitoring script; it’s an intelligent guardian created to scan, filter, and analyze Postfix log data. Inspired by the need for a smarter, self-aware sentinel over your email logs, M.A.I.L-Sentinel leverages AI to provide actionable recommendations for error resolution, ensuring your email infrastructure remains robust and secure.
 
 ## Requirements ✅
 
