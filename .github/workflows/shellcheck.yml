@@ -1,0 +1,27 @@
+name: ShellCheck
+
+on:
+  push:
+    branches: [ main, master ]
+    paths:
+      - '**.sh'
+      - '**.bash'
+  pull_request:
+    branches: [ main, master ]
+    paths:
+      - '**.sh'
+      - '**.bash'
+
+jobs:
+  shellcheck:
+    name: ShellCheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Install ShellCheck
+        run: sudo apt-get install -y shellcheck
+      
+      - name: Run ShellCheck
+        run: |
+          find . -type f -name "*.sh" -o -name "*.bash" | xargs shellcheck -x
