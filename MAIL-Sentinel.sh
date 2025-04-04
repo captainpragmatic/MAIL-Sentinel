@@ -39,6 +39,7 @@
 # ###############################################################
 # set -euo pipefailil
 # Source secure configuration if it exists.
+# shellcheck disable=SC1091
 [ -f "$(dirname "$0")/config.sh" ] && source "$(dirname "$0")/config.sh"
 
 # Validate required external commands are installed.
@@ -241,8 +242,6 @@ EOF
             if [ $api_call_count -lt 5 ]; then
                 echo "DEBUG: Making API call for: $summary_line" >&2
                 recommendation=$(get_fix_recommendation "$summary_line")
-                # Ensure recommendation is captured safely; print its length
-                rec_len=$(printf "%s" "$recommendation" | wc -c)
                 echo "DEBUG: Incrementing api_call_count." >&2
                 ((api_call_count++))
                 echo "DEBUG: api_call_count is now: $api_call_count" >&2
