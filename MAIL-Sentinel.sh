@@ -239,7 +239,7 @@ EOF
     for ip in "${!ip_errors_count[@]}"; do
         count=${ip_errors_count[$ip]}
         sample_msg=${ip_errors_sample[$ip]}
-        if [ "$count" -gt 3 ]; then
+        if [ "$count" -gt 5 ]; then
             summary_line="$ip: $sample_msg (occurred $count times)"
             if [ $api_call_count -lt 5 ]; then
                 echo "DEBUG: Making API call for: $summary_line" >&2
