@@ -42,21 +42,23 @@ shopt -s inherit_errexit  # Bash 4.4+ - propagate errors from command substituti
 shopt -s nullglob         # Empty glob expansions instead of literal strings
 
 # Cleanup function called on exit
+# shellcheck disable=SC2317,SC2329  # Called via trap
 cleanup() {
     local exit_code=$?
     # Add any cleanup operations here if needed (temp files, etc.)
     # For now, just ensure we exit cleanly
-    return $exit_code
+    return "$exit_code"
 }
 
 # Error handler with better context
+# shellcheck disable=SC2317,SC2329  # Called via trap
 handle_error() {
     local exit_code=$?
     local line_no=$1
     echo "✗ FATAL: Error at line $line_no (exit code: $exit_code)" >&2
     echo "  Function: ${FUNCNAME[2]:-main}" >&2
     echo "  Command: $BASH_COMMAND" >&2
-    exit $exit_code
+    exit "$exit_code"
 }
 
 # Setup traps
@@ -130,10 +132,10 @@ AUTO_IGNORE_THRESHOLD=${AUTO_IGNORE_THRESHOLD:-3}
 MAIL_SENTINEL_DEBUG=${MAIL_SENTINEL_DEBUG:-false}
 KNOWN_SAFE_PATTERNS=${KNOWN_SAFE_PATTERNS:-"gaia.bounces.google.com|amazonses.com|mailgun.net|sendgrid.net"}
 
-# Helper function for debug logging
+# Helper function for debug logging with timestamps
 debug_log() {
     if [ "$MAIL_SENTINEL_DEBUG" = true ]; then
-        echo "DEBUG: $*" >&2
+        echo "DEBUG [$(date '+%H:%M:%S')]: $*" >&2
     fi
 }
 
@@ -208,8 +210,7 @@ get_ip_intelligence() {
     # Try to get hostname with timeout
     set +e  # Disable exit on error temporarily
     local host_output
-    host_output=$(timeout 3 host "$ip" 2>/dev/null)
-    if [ $? -eq 0 ] && [ -n "$host_output" ]; then
+    if host_output=$(timeout 3 host "$ip" 2>/dev/null); then
         hostname=$(grep "domain name pointer" <<< "$host_output" | awk '{print $NF}' | sed 's/\.$//' 2>/dev/null || echo "unknown")
     fi
     set -e
@@ -234,54 +235,67 @@ get_ip_intelligence() {
 
 # Categorize error severity
 categorize_severity() {
-    local error_line="$1"
-    local count="$2"
+    local ip="$1"
+    local error_line="$2"
+    local count="$3"
 
-    debug_log "categorize_severity called with count=$count"
+    # Truncate message for logging (first 80 chars)
+    local msg_preview="${error_line:0:80}"
+    [ ${#error_line} -gt 80 ] && msg_preview="${msg_preview}..."
+
+    debug_log "categorize_severity: IP=$ip, count=$count, msg='$msg_preview'"
 
     # Input validation
     if [ -z "$error_line" ]; then
-        debug_log "Empty error_line provided"
+        debug_log "IP=$ip: empty error_line provided -> severity=INFO"
         echo "INFO"
         return 0
     fi
 
     if ! [[ "$count" =~ ^[0-9]+$ ]]; then
-        debug_log "Invalid count value: $count - defaulting to 0"
+        debug_log "IP=$ip: invalid count value: $count - defaulting to 0"
         count=0
     fi
 
     # Check if it matches known safe patterns (INFO level)
     # Using grep with here-string (safer than pipe) and timeout
     if timeout 2 grep -qE "$KNOWN_SAFE_PATTERNS" <<< "$error_line" 2>/dev/null; then
-        debug_log "Matched KNOWN_SAFE_PATTERNS"
+        local matched_pattern
+        matched_pattern=$(grep -oE "$KNOWN_SAFE_PATTERNS" <<< "$error_line" 2>/dev/null | head -1)
+        debug_log "IP=$ip matched KNOWN_SAFE_PATTERNS '$matched_pattern' -> severity=INFO"
         echo "INFO"
         return 0
     fi
 
     # Critical: authentication failures, service disruptions, delivery failures
     if timeout 2 grep -qiE "authentication failed|service unavailable|queue file write error|disk full|fatal" <<< "$error_line" 2>/dev/null; then
-        debug_log "Matched CRITICAL pattern"
+        local matched_pattern
+        matched_pattern=$(grep -oiE "authentication failed|service unavailable|queue file write error|disk full|fatal" <<< "$error_line" 2>/dev/null | head -1)
+        debug_log "IP=$ip matched CRITICAL pattern '$matched_pattern' -> severity=CRITICAL"
         echo "CRITICAL"
         return 0
     fi
 
     # Warning: SSL errors, connection issues, bounces, deferred
     if timeout 2 grep -qiE "SSL_accept|TLS|connection reset|bounced|deferred|timeout" <<< "$error_line" 2>/dev/null; then
-        debug_log "Matched WARNING/INFO pattern"
+        local matched_pattern
+        matched_pattern=$(grep -oiE "SSL_accept|TLS|connection reset|bounced|deferred|timeout" <<< "$error_line" 2>/dev/null | head -1)
         if [ "$count" -gt 10 ]; then
+            debug_log "IP=$ip matched pattern '$matched_pattern' (count=$count>10) -> severity=WARNING"
             echo "WARNING"
         else
+            debug_log "IP=$ip matched pattern '$matched_pattern' (count=$count<=10) -> severity=INFO"
             echo "INFO"
         fi
         return 0
     fi
 
     # Default to INFO for low-count errors
-    debug_log "Using default severity logic"
     if [ "$count" -le "$AUTO_IGNORE_THRESHOLD" ]; then
+        debug_log "IP=$ip no patterns matched, count=$count<=$AUTO_IGNORE_THRESHOLD -> severity=INFO (default)"
         echo "INFO"
     else
+        debug_log "IP=$ip no patterns matched, count=$count>$AUTO_IGNORE_THRESHOLD -> severity=WARNING (default)"
         echo "WARNING"
     fi
     return 0
@@ -425,7 +439,7 @@ for logfile in "${logfiles[@]}"; do
             if [ "${ip_errors_count["$ip"]}" -eq 1 ]; then
                 ip_errors_sample["$ip"]="$sample_msg"
                 # Categorize severity for this IP (will be updated later based on final count)
-                severity=$(categorize_severity "$sample_msg" "${ip_errors_count["$ip"]}")
+                severity=$(categorize_severity "$ip" "$sample_msg" "${ip_errors_count["$ip"]}")
                 ip_errors_severity["$ip"]="$severity"
             fi
 
@@ -496,11 +510,11 @@ if [ "$send_immediately" = false ] && (( ${#errors[@]} > 0 )); then
         # Call categorize_severity with error protection
         # Note: timeout within the function (grep calls) provides timeout protection
         set +e  # Temporarily disable exit on error for this block
-        severity=$(categorize_severity "$sample_msg" "$count" 2>&1)
-        local cat_exit_code=$?
+        severity=$(categorize_severity "$ip" "$sample_msg" "$count" 2>&1)
+        cat_exit_code=$?
         set -e  # Re-enable exit on error
 
-        if [ $cat_exit_code -eq 0 ]; then
+        if [ "$cat_exit_code" -eq 0 ]; then
             echo "    Severity: $severity" >&2
         else
             echo "    ✗ ERROR: categorize_severity failed (exit code: $cat_exit_code) for IP $ip" >&2
