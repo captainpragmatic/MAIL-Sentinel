@@ -351,8 +351,30 @@ get_ip_intelligence() {
     if [ -n "$spamhaus_result" ]; then
         blocklist_status="listed"
         blocklist_name="Spamhaus ZEN"
-    else
-        # Check Barracuda
+    fi
+
+    # Check UCEProtect Level 1 (individual IPs)
+    if [ "$blocklist_status" = "clean" ]; then
+        local uceprotect1_result
+        uceprotect1_result=$(timeout 2 host "${reversed_ip}.dnsbl-1.uceprotect.net" 2>/dev/null | grep "has address" | grep -o "127\.0\.0\.[0-9]*" || true)
+        if [ -n "$uceprotect1_result" ]; then
+            blocklist_status="listed"
+            blocklist_name="UCEProtect L1"
+        fi
+    fi
+
+    # Check UCEProtect Level 2 (ISP/hosting ranges)
+    if [ "$blocklist_status" = "clean" ]; then
+        local uceprotect2_result
+        uceprotect2_result=$(timeout 2 host "${reversed_ip}.dnsbl-2.uceprotect.net" 2>/dev/null | grep "has address" | grep -o "127\.0\.0\.[0-9]*" || true)
+        if [ -n "$uceprotect2_result" ]; then
+            blocklist_status="listed"
+            blocklist_name="UCEProtect L2 (network range)"
+        fi
+    fi
+
+    # Check Barracuda
+    if [ "$blocklist_status" = "clean" ]; then
         local barracuda_result
         barracuda_result=$(timeout 2 host "${reversed_ip}.b.barracudacentral.org" 2>/dev/null | grep "has address" | grep -o "127\.0\.0\.[0-9]*" || true)
         if [ -n "$barracuda_result" ]; then
