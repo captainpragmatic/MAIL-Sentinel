@@ -464,6 +464,31 @@ get_fail2ban_jails() {
     fi
 }
 
+# Check if IP is already banned in fail2ban jails
+check_fail2ban_status() {
+    local ip="$1"
+    local jails="$2"
+    local banned_in=""
+    local not_banned_in=""
+
+    if [ "$jails" = "none" ]; then
+        echo "none|"
+        return
+    fi
+
+    for jail in $jails; do
+        set +e
+        if fail2ban-client status "$jail" 2>/dev/null | grep -q "|- Banned IP list:.*$ip"; then
+            banned_in="$banned_in $jail"
+        else
+            not_banned_in="$not_banned_in $jail"
+        fi
+        set -e
+    done
+
+    echo "${banned_in# }|${not_banned_in# }"
+}
+
 # Generate specific command suggestions based on error type
 get_command_suggestions() {
     local error_line="$1"
@@ -477,22 +502,53 @@ get_command_suggestions() {
         commands+="# Check if IP is on blocklists:\n"
         commands+="# Visit: https://mxtoolbox.com/SuperTool.aspx?action=blacklist%3a$ip\n\n"
 
-        # Auto-detect fail2ban jails and provide specific commands
+        # Auto-detect fail2ban jails and check ban status
         local jails
         jails=$(get_fail2ban_jails)
 
         if [ "$jails" != "none" ]; then
-            commands+="# Block this IP with fail2ban:\n"
-            for jail in $jails; do
-                commands+="fail2ban-client set $jail banip $ip\n"
-            done
-            commands+="\n"
+            local banned_jails not_banned_jails
+            IFS='|' read -r banned_jails not_banned_jails <<< "$(check_fail2ban_status "$ip" "$jails")"
+
+            if [ -n "$banned_jails" ]; then
+                commands+="# ✓ IP already blocked in fail2ban:\n"
+                for jail in $banned_jails; do
+                    commands+="# - $jail (already banned)\n"
+                done
+                commands+="\n# To unblock if needed:\n"
+                for jail in $banned_jails; do
+                    commands+="# fail2ban-client set $jail unbanip $ip\n"
+                done
+                commands+="\n"
+            fi
+
+            if [ -n "$not_banned_jails" ]; then
+                commands+="# Block this IP with fail2ban:\n"
+                for jail in $not_banned_jails; do
+                    commands+="fail2ban-client set $jail banip $ip\n"
+                done
+                commands+="\n"
+            fi
         else
             commands+="# fail2ban not available or no mail jails configured\n\n"
         fi
 
-        commands+="# Or block with iptables:\n"
-        commands+="iptables -A INPUT -s $ip -j DROP\n\n"
+        # Check iptables status
+        set +e
+        local iptables_blocked
+        iptables_blocked=$(iptables -L INPUT -n 2>/dev/null | grep -c "$ip" || echo "0")
+        set -e
+
+        if [ "$iptables_blocked" -gt 0 ]; then
+            commands+="# ✓ IP already blocked in iptables ($iptables_blocked rule(s))\n"
+            commands+="# To view rules:\n"
+            commands+="# iptables -L INPUT -n | grep $ip\n"
+            commands+="# To remove if needed:\n"
+            commands+="# iptables -D INPUT -s $ip -j DROP\n\n"
+        else
+            commands+="# Block with iptables:\n"
+            commands+="iptables -A INPUT -s $ip -j DROP\n\n"
+        fi
     fi
 
     if grep -qiE "authentication failed" <<< "$error_line" 2>/dev/null; then
