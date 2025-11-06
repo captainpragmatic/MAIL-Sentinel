@@ -359,11 +359,8 @@ get_command_suggestions() {
     local ip="$2"
     local commands=""
 
-    if grep -qiE "SSL_accept|TLS" <<< "$error_line" 2>/dev/null; then
-        # Certificate check is now done by automation - only include protocol settings
-        commands+="# View current TLS protocol settings:\n"
-        commands+="postconf smtpd_tls_security_level smtpd_tls_protocols\n\n"
-    fi
+    # SSL/TLS errors: no manual commands needed - automation handles all checks
+    # (certificate validity, expiry, successful connections, scanner detection)
 
     if grep -qiE "connection reset|refused|timeout" <<< "$error_line" 2>/dev/null; then
         commands+="# Check if IP is on blocklists:\n"
