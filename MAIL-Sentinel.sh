@@ -285,14 +285,14 @@ get_ip_intelligence() {
     local blocklist_status="clean"
 
     if [ "$ip" = "unknown" ] || [ "$ip" = "internal" ] || [ -z "$ip" ]; then
-        echo "unknown|unknown|unknown|unknown|unknown|clean"
+        echo "unknown|unknown|unknown|unknown|unknown|clean|"
         return 0
     fi
 
     # Validate IP format
     if ! [[ "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
         debug_log "Invalid IP format for intelligence lookup: $ip"
-        echo "unknown|unknown|unknown|unknown|unknown|clean"
+        echo "unknown|unknown|unknown|unknown|unknown|clean|"
         return 0
     fi
 
@@ -339,20 +339,30 @@ get_ip_intelligence() {
     fi
 
     # Check public DNS-based blocklists (quick check)
+    # DNSBL returns 127.0.0.x if listed, NXDOMAIN if clean
     set +e
     local reversed_ip
     reversed_ip=$(echo "$ip" | awk -F. '{print $4"."$3"."$2"."$1}')
+    local blocklist_name=""
 
     # Check Spamhaus ZEN (combines multiple blocklists)
-    if timeout 2 host "${reversed_ip}.zen.spamhaus.org" &>/dev/null; then
+    local spamhaus_result
+    spamhaus_result=$(timeout 2 host "${reversed_ip}.zen.spamhaus.org" 2>/dev/null | grep "has address" | grep -o "127\.0\.0\.[0-9]*" || true)
+    if [ -n "$spamhaus_result" ]; then
         blocklist_status="listed"
-    # Check Barracuda
-    elif timeout 2 host "${reversed_ip}.b.barracudacentral.org" &>/dev/null; then
-        blocklist_status="listed"
+        blocklist_name="Spamhaus ZEN"
+    else
+        # Check Barracuda
+        local barracuda_result
+        barracuda_result=$(timeout 2 host "${reversed_ip}.b.barracudacentral.org" 2>/dev/null | grep "has address" | grep -o "127\.0\.0\.[0-9]*" || true)
+        if [ -n "$barracuda_result" ]; then
+            blocklist_status="listed"
+            blocklist_name="Barracuda"
+        fi
     fi
     set -e
 
-    echo "${hostname:-unknown}|${asn:-unknown}|${country:-unknown}|${org:-unknown}|${network_type:-unknown}|${blocklist_status:-clean}"
+    echo "${hostname:-unknown}|${asn:-unknown}|${country:-unknown}|${org:-unknown}|${network_type:-unknown}|${blocklist_status:-clean}|${blocklist_name}"
     return 0
 }
 
@@ -1423,7 +1433,7 @@ postconf -n"
                     ip_intel=$(get_ip_intelligence "$ip")
                     ip_intelligence_cache["$ip"]="$ip_intel"
                 fi
-                IFS='|' read -r hostname asn country org network_type blocklist_status <<< "$ip_intel"
+                IFS='|' read -r hostname asn country org network_type blocklist_status blocklist_name <<< "$ip_intel"
 
                 # Build automation context summary for AI (if applicable)
                 automation_summary=$(build_automation_summary "$ip" "$hostname" "$count" "$sample_msg")
@@ -1492,7 +1502,11 @@ postconf -n"
                 # Build blocklist warning
                 blocklist_warning=""
                 if [ "$blocklist_status" = "listed" ]; then
-                    blocklist_warning="<br>⚠️ <span style='color: #d32f2f; font-weight: bold;'>BLOCKLIST: Found on public spam/abuse lists</span>"
+                    if [ -n "$blocklist_name" ]; then
+                        blocklist_warning="<br>⚠️ <span style='color: #d32f2f; font-weight: bold;'>BLOCKLIST: Listed on $blocklist_name</span>"
+                    else
+                        blocklist_warning="<br>⚠️ <span style='color: #d32f2f; font-weight: bold;'>BLOCKLIST: Found on public spam/abuse lists</span>"
+                    fi
                 fi
 
                 # Build network type badge
