@@ -1110,16 +1110,6 @@ EOF
   <div class="commands">
     <strong>⚡ ACTIONABLE COMMANDS (copy & paste):</strong><br><br>$commands
   </div>
-
-  <div style="margin-top: 15px;">
-    <strong>✅ Action Checklist:</strong>
-    <ul class="checklist">
-      $([ "$ip" = "internal" ] && echo "<li>Review server configuration and system logs</li>" || echo "<li>Review IP intelligence and determine if source is legitimate or malicious</li>")
-      <li>Run the suggested commands to investigate further</li>
-      $([ "$ip" = "internal" ] && echo "<li>Check SSL/TLS certificates and Postfix configuration</li>" || echo "<li>Take appropriate action (whitelist, block, or configure)</li>")
-      $([ "$ip" = "internal" ] && echo "<li>Monitor server logs for related errors</li>" || echo "<li>Monitor for recurring patterns from this IP</li>")
-    </ul>
-  </div>
 </div>
 EOF
 )
