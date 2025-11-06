@@ -83,17 +83,6 @@ declare -A ip_errors_sample
 declare -A ip_errors_severity
 declare -A ip_intelligence_cache
 
-# Severity counters for executive summary
-critical_count=0
-warning_count=0
-info_count=0
-
-# Calculate epoch for 24 hours ago
-cutoff_epoch=$(date --date="24 hours ago" +%s)
-
-# Global counter for API calls
-declare -g __get_fix_recommendation_api_call_count=0
-
 # Configuration defaults (can be overridden in config.sh)
 ERROR_THRESHOLD=${ERROR_THRESHOLD:-5}
 API_CALL_LIMIT=${API_CALL_LIMIT:-5}
@@ -102,6 +91,17 @@ MAX_API_TIMEOUT=${MAX_API_TIMEOUT:-30}
 AUTO_IGNORE_THRESHOLD=${AUTO_IGNORE_THRESHOLD:-3}
 MAIL_SENTINEL_DEBUG=${MAIL_SENTINEL_DEBUG:-false}
 KNOWN_SAFE_PATTERNS=${KNOWN_SAFE_PATTERNS:-"gaia.bounces.google.com|amazonses.com|mailgun.net|sendgrid.net"}
+
+# Severity counters for executive summary
+critical_count=0
+warning_count=0
+info_count=0
+
+# Calculate epoch for TIME_WINDOW_HOURS hours ago
+cutoff_epoch=$(date --date="${TIME_WINDOW_HOURS} hours ago" +%s)
+
+# Global counter for API calls
+declare -g __get_fix_recommendation_api_call_count=0
 
 # Helper function for debug logging
 debug_log() {
