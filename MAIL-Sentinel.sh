@@ -157,12 +157,23 @@ get_fix_recommendation() {
     # Build a safe JSON payload using jq
     local payload
     local model="${OPENAI_MODEL:-gpt-5-mini}"
-    payload=$(jq -n --arg model "$model" --arg prompt "$prompt" '{
-                        model: $model,
-                        messages: [{role: "user", content: $prompt}],
-                        max_tokens: 200,
-                        temperature: 0.4
-                    }')
+
+    # Newer models (gpt-5, gpt-4.1 series, o-series) use max_completion_tokens instead of max_tokens
+    if [[ "$model" =~ ^(gpt-5|gpt-4\.1|o[0-9]|o[0-9]-) ]]; then
+        payload=$(jq -n --arg model "$model" --arg prompt "$prompt" '{
+                            model: $model,
+                            messages: [{role: "user", content: $prompt}],
+                            max_completion_tokens: 200,
+                            temperature: 0.4
+                        }')
+    else
+        payload=$(jq -n --arg model "$model" --arg prompt "$prompt" '{
+                            model: $model,
+                            messages: [{role: "user", content: $prompt}],
+                            max_tokens: 200,
+                            temperature: 0.4
+                        }')
+    fi
 
     # Call OpenAI API with a maximum time configured via MAX_API_TIMEOUT
     local response
@@ -475,10 +486,15 @@ check_successful_tls_connections() {
     local success_count=0
     local recent_logs="/var/log/mail.log"
 
-    # Look for successful TLS patterns in recent logs
+    # Look for successful STARTTLS patterns in Postfix logs
+    # Pattern: "disconnect from ... starttls=1" means TLS succeeded
+    # Pattern: "disconnect from ... starttls=0/1" means TLS failed (exclude this)
     if [ -f "$recent_logs" ]; then
         set +e
-        success_count=$(grep -E "TLS connection established|Anonymous TLS connection" "$recent_logs" 2>/dev/null | \
+        # Count successful STARTTLS (starttls=1, but NOT starttls=0/1)
+        success_count=$(grep "postfix/smtpd" "$recent_logs" 2>/dev/null | \
+                       grep "starttls=1" | \
+                       grep -v "starttls=0/1" | \
                        grep -v "$exclude_ip" | \
                        tail -100 | \
                        wc -l)
