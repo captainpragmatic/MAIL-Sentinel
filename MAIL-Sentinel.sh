@@ -464,6 +464,69 @@ get_fail2ban_jails() {
     fi
 }
 
+# Check fail2ban history for an IP
+check_fail2ban_history() {
+    local ip="$1"
+    local ban_count=0
+    local unban_count=0
+    local last_ban=""
+    local last_unban=""
+    local jails_banned_in=""
+
+    # Check current and archived logs
+    local logfiles=("/var/log/fail2ban.log" "/var/log/fail2ban.log.1")
+
+    # Add compressed logs if they exist
+    set +e
+    local compressed_logs
+    compressed_logs=$(ls /var/log/fail2ban.log.*.gz 2>/dev/null || true)
+    set -e
+
+    for logfile in "${logfiles[@]}" $compressed_logs; do
+        [ -f "$logfile" ] || continue
+
+        set +e
+        local content
+        if [[ "$logfile" == *.gz ]]; then
+            content=$(zcat "$logfile" 2>/dev/null)
+        else
+            content=$(cat "$logfile" 2>/dev/null)
+        fi
+        set -e
+
+        if [ -n "$content" ]; then
+            # Count bans
+            local file_bans
+            file_bans=$(grep -c "Ban $ip" <<< "$content" 2>/dev/null || echo "0")
+            ban_count=$((ban_count + file_bans))
+
+            # Count unbans
+            local file_unbans
+            file_unbans=$(grep -c "Unban $ip" <<< "$content" 2>/dev/null || echo "0")
+            unban_count=$((unban_count + file_unbans))
+
+            # Get last ban timestamp and jail
+            local latest_ban
+            latest_ban=$(grep "Ban $ip" <<< "$content" 2>/dev/null | tail -1 || true)
+            if [ -n "$latest_ban" ]; then
+                last_ban=$(echo "$latest_ban" | awk '{print $1, $2}')
+                local jail_name
+                jail_name=$(echo "$latest_ban" | grep -oP '\[\K[^\]]+' | head -1 || echo "unknown")
+                jails_banned_in="$jails_banned_in $jail_name"
+            fi
+
+            # Get last unban timestamp
+            local latest_unban
+            latest_unban=$(grep "Unban $ip" <<< "$content" 2>/dev/null | tail -1 || true)
+            if [ -n "$latest_unban" ]; then
+                last_unban=$(echo "$latest_unban" | awk '{print $1, $2}')
+            fi
+        fi
+    done
+
+    echo "$ban_count|$unban_count|$last_ban|$last_unban|${jails_banned_in# }"
+}
+
 # Check if IP is already banned in fail2ban jails
 check_fail2ban_status() {
     local ip="$1"
@@ -502,18 +565,42 @@ get_command_suggestions() {
         commands+="# Check if IP is on blocklists:\n"
         commands+="# Visit: https://mxtoolbox.com/SuperTool.aspx?action=blacklist%3a$ip\n\n"
 
-        # Auto-detect fail2ban jails and check ban status
+        # Auto-detect fail2ban jails and check ban status + history
         local jails
         jails=$(get_fail2ban_jails)
 
         if [ "$jails" != "none" ]; then
+            # Check current ban status
             local banned_jails not_banned_jails
             IFS='|' read -r banned_jails not_banned_jails <<< "$(check_fail2ban_status "$ip" "$jails")"
 
+            # Check ban history
+            local ban_count unban_count last_ban last_unban history_jails
+            IFS='|' read -r ban_count unban_count last_ban last_unban history_jails <<< "$(check_fail2ban_history "$ip")"
+
+            # Display history if available
+            if [ "$ban_count" -gt 0 ] || [ "$unban_count" -gt 0 ]; then
+                commands+="# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                commands+="# 📊 FAIL2BAN HISTORY FOR THIS IP:\n"
+                commands+="# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                commands+="# Total bans: $ban_count\n"
+                commands+="# Total unbans: $unban_count\n"
+                [ -n "$last_ban" ] && commands+="# Last ban: $last_ban (jails: $history_jails)\n"
+                [ -n "$last_unban" ] && commands+="# Last unban: $last_unban\n"
+
+                if [ "$ban_count" -gt 3 ]; then
+                    commands+="# ⚠️  WARNING: Repeat offender! This IP has been banned $ban_count times.\n"
+                elif [ "$ban_count" -gt 0 ]; then
+                    commands+="# ℹ️  Note: This IP has been banned before.\n"
+                fi
+                commands+="# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            fi
+
+            # Display current status
             if [ -n "$banned_jails" ]; then
-                commands+="# ✓ IP already blocked in fail2ban:\n"
+                commands+="# ✓ Currently blocked in fail2ban:\n"
                 for jail in $banned_jails; do
-                    commands+="# - $jail (already banned)\n"
+                    commands+="# - $jail (actively banned)\n"
                 done
                 commands+="\n# To unblock if needed:\n"
                 for jail in $banned_jails; do
@@ -523,7 +610,7 @@ get_command_suggestions() {
             fi
 
             if [ -n "$not_banned_jails" ]; then
-                commands+="# Block this IP with fail2ban:\n"
+                commands+="# Block this IP in fail2ban:\n"
                 for jail in $not_banned_jails; do
                     commands+="fail2ban-client set $jail banip $ip\n"
                 done
