@@ -736,6 +736,12 @@ for logfile in "${logfiles[@]}"; do
                 fi
             fi
 
+            # Skip localhost/internal connections
+            if [ "$ip" = "127.0.0.1" ] || [ "$ip" = "::1" ]; then
+                debug_log "Skipping localhost connection: ${line:0:100}"
+                continue
+            fi
+
             # Remove the timestamp for a uniform summary message
             sample_msg=$(echo "$line" | cut -d' ' -f2-)
 
