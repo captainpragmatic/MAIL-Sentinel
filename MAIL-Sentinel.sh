@@ -1399,7 +1399,9 @@ EOF
     echo "✓ CHECKPOINT: Processing ${#ip_errors_count[@]} unique IPs for detailed analysis..." >&2
 
     # Sort IPs by severity (Critical, Warning, Info) then by count
-    declare -a critical_ips warning_ips info_ips
+    declare -a critical_ips
+    declare -a warning_ips
+    declare -a info_ips
     for ip in "${!ip_errors_count[@]}"; do
         severity=${ip_errors_severity[$ip]:-INFO}
         case "$severity" in
@@ -1608,17 +1610,18 @@ postconf -n"
 <h2>📊 Low Priority Errors</h2>
 <div style="background: #f8f9fa; padding: 15px; border-radius: 5px; border-left: 4px solid #6c757d;">
   <p><strong>$low_priority_count IP(s)</strong> with 2-$((ERROR_THRESHOLD - 1)) errors (below detailed analysis threshold). Single-occurrence IPs are excluded.</p>
-  <p><span onclick="var t=document.getElementById('lowPriorityTable'); t.style.display=(t.style.display=='none')?'table':'none'; this.textContent=(t.style.display=='none')?'▶ Click to expand low priority errors':'▼ Click to collapse low priority errors';" class="low-priority-toggle">▶ Click to expand low priority errors</span></p>
-  <table id="lowPriorityTable" style="width: 100%; margin-top: 15px; border-collapse: collapse; display: none;">
-    <thead>
-      <tr style="background: #e9ecef;">
-        <th style="padding: 8px; text-align: left; border: 1px solid #dee2e6;">IP Address</th>
-        <th style="padding: 8px; text-align: left; border: 1px solid #dee2e6;">Count</th>
-        <th style="padding: 8px; text-align: left; border: 1px solid #dee2e6;">Severity</th>
-        <th style="padding: 8px; text-align: left; border: 1px solid #dee2e6;">Sample Message</th>
-      </tr>
-    </thead>
-    <tbody>
+  <details>
+    <summary style="cursor: pointer; color: #007bff; font-weight: bold; padding: 10px 0; user-select: none;">Click to expand low priority errors</summary>
+    <table style="width: 100%; margin-top: 15px; border-collapse: collapse;">
+      <thead>
+        <tr style="background: #e9ecef;">
+          <th style="padding: 8px; text-align: left; border: 1px solid #dee2e6;">IP Address</th>
+          <th style="padding: 8px; text-align: left; border: 1px solid #dee2e6;">Count</th>
+          <th style="padding: 8px; text-align: left; border: 1px solid #dee2e6;">Severity</th>
+          <th style="padding: 8px; text-align: left; border: 1px solid #dee2e6;">Sample Message</th>
+        </tr>
+      </thead>
+      <tbody>
 LOWPRIORITY
 )
         # Now substitute the variables
@@ -1659,8 +1662,9 @@ EOF
         done
 
         email_body+=$(cat <<'EOF'
-    </tbody>
-  </table>
+      </tbody>
+    </table>
+  </details>
 </div>
 EOF
 )
