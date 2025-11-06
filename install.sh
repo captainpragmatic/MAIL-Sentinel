@@ -80,6 +80,58 @@ echo -e "If you don't have one yet, visit: ${CYAN}https://platform.openai.com/ap
 read -r -sp "Enter your OpenAI API key: " openai_key
 echo ""
 
+# Advanced settings configuration
+echo -e "\n${BLUE}⚙️  Advanced Settings${NC}"
+echo -e "M.A.I.L. Sentinel has several optional settings you can customize."
+echo -e "Would you like to configure advanced settings, or use the defaults?"
+read -r -p "Configure advanced settings? (y/n) [default: n]: " configure_advanced
+
+# Set defaults
+error_threshold=5
+api_call_limit=5
+time_window_hours=24
+max_api_timeout=30
+auto_ignore_threshold=3
+debug_mode="false"
+known_safe_patterns="gaia.bounces.google.com|amazonses.com|mailgun.net|sendgrid.net"
+
+if [[ "$configure_advanced" =~ ^[Yy]$ ]]; then
+    echo -e "\n${CYAN}Configuring advanced settings...${NC}"
+
+    echo -e "\n${BOLD}Error Threshold${NC}"
+    echo -e "Minimum error count before sending to OpenAI for AI analysis"
+    read -r -p "Enter ERROR_THRESHOLD [default: 5]: " input_threshold
+    error_threshold=${input_threshold:-5}
+
+    echo -e "\n${BOLD}API Call Limit${NC}"
+    echo -e "Maximum OpenAI API calls per script execution (to control costs)"
+    read -r -p "Enter API_CALL_LIMIT [default: 5]: " input_api_limit
+    api_call_limit=${input_api_limit:-5}
+
+    echo -e "\n${BOLD}Time Window${NC}"
+    echo -e "Hours of logs to analyze (looks back from current time)"
+    read -r -p "Enter TIME_WINDOW_HOURS [default: 24]: " input_time_window
+    time_window_hours=${input_time_window:-24}
+
+    echo -e "\n${BOLD}Auto-Ignore Threshold${NC}"
+    echo -e "IPs with fewer errors than this will be categorized as INFO (noise filtering)"
+    read -r -p "Enter AUTO_IGNORE_THRESHOLD [default: 3]: " input_auto_ignore
+    auto_ignore_threshold=${input_auto_ignore:-3}
+
+    echo -e "\n${BOLD}Debug Mode${NC}"
+    echo -e "Enable verbose debug output for troubleshooting"
+    read -r -p "Enable debug mode? (true/false) [default: false]: " input_debug
+    debug_mode=${input_debug:-false}
+
+    echo -e "\n${BOLD}Known Safe Patterns${NC}"
+    echo -e "Pipe-separated patterns to whitelist (e.g., trusted services like Google Bounces)"
+    echo -e "Current default: gaia.bounces.google.com|amazonses.com|mailgun.net|sendgrid.net"
+    read -r -p "Enter KNOWN_SAFE_PATTERNS [press Enter to use default]: " input_patterns
+    if [ -n "$input_patterns" ]; then
+        known_safe_patterns="$input_patterns"
+    fi
+fi
+
 # Create the config.sh file
 echo -e "\n${BOLD}Creating configuration file...${NC}"
 
@@ -88,8 +140,23 @@ cat > "$CONFIG_FILE" << EOF
 #!/bin/bash
 # Secure configuration file for M.A.I.L. Sentinel.
 # Generated on $(date)
+
+# Required: Email and API Configuration
 export POSTFIX_REPORT_EMAIL="$email_address"  # Recipient email
 export OPENAI_API_KEY="$openai_key"  # API key
+
+# Optional: Thresholds and Limits
+export ERROR_THRESHOLD=$error_threshold           # Minimum error count before sending to OpenAI
+export API_CALL_LIMIT=$api_call_limit           # Maximum API calls per execution
+export TIME_WINDOW_HOURS=$time_window_hours       # Hours of logs to analyze
+export MAX_API_TIMEOUT=30         # OpenAI API timeout in seconds
+export AUTO_IGNORE_THRESHOLD=$auto_ignore_threshold    # Ignore IPs with fewer errors than this
+
+# Optional: Debug Mode
+export MAIL_SENTINEL_DEBUG=$debug_mode  # Set to true for verbose debug output
+
+# Optional: Known Safe Patterns (pipe-separated, no spaces)
+export KNOWN_SAFE_PATTERNS="$known_safe_patterns"
 EOF
 
 # Set secure permissions
