@@ -1048,6 +1048,81 @@ EOF
         echo "⚠ WARNING: No IPs exceeded threshold of $ERROR_THRESHOLD errors - email will contain executive summary only" >&2
     fi
 
+    # Add Low Priority section for IPs below ERROR_THRESHOLD
+    low_priority_count=0
+    for ip in "${critical_ips[@]}" "${warning_ips[@]}" "${info_ips[@]}"; do
+        [ -z "$ip" ] && continue
+        count=${ip_errors_count[$ip]:-0}
+        if [ "$count" -lt "$ERROR_THRESHOLD" ] && [ "$count" -gt 0 ]; then
+            (( ++low_priority_count ))
+        fi
+    done
+
+    if [ "$low_priority_count" -gt 0 ]; then
+        email_body+=$(cat <<EOF
+
+<hr>
+<h2>📊 Low Priority Errors</h2>
+<div style="background: #f8f9fa; padding: 15px; border-radius: 5px; border-left: 4px solid #6c757d;">
+  <p><strong>$low_priority_count IP(s)</strong> with fewer than $ERROR_THRESHOLD errors (below detailed analysis threshold).</p>
+  <details>
+    <summary style="cursor: pointer; color: #007bff; font-weight: bold;">Click to expand low priority errors</summary>
+    <table style="width: 100%; margin-top: 15px; border-collapse: collapse;">
+      <thead>
+        <tr style="background: #e9ecef;">
+          <th style="padding: 8px; text-align: left; border: 1px solid #dee2e6;">IP Address</th>
+          <th style="padding: 8px; text-align: left; border: 1px solid #dee2e6;">Count</th>
+          <th style="padding: 8px; text-align: left; border: 1px solid #dee2e6;">Severity</th>
+          <th style="padding: 8px; text-align: left; border: 1px solid #dee2e6;">Sample Message</th>
+        </tr>
+      </thead>
+      <tbody>
+EOF
+)
+
+        # Add low priority IPs to table
+        for ip in "${critical_ips[@]}" "${warning_ips[@]}" "${info_ips[@]}"; do
+            [ -z "$ip" ] && continue
+            count=${ip_errors_count[$ip]:-0}
+
+            if [ "$count" -lt "$ERROR_THRESHOLD" ] && [ "$count" -gt 0 ]; then
+                sample_msg=${ip_errors_sample[$ip]:-"No sample message"}
+                severity=${ip_errors_severity[$ip]:-INFO}
+
+                # Truncate message for table display
+                display_msg="${sample_msg:0:100}"
+                [ ${#sample_msg} -gt 100 ] && display_msg="${display_msg}..."
+
+                # Choose row color based on severity
+                case "$severity" in
+                    CRITICAL) row_color="#fee" ;;
+                    WARNING) row_color="#ffe" ;;
+                    INFO) row_color="#eff" ;;
+                    *) row_color="#fff" ;;
+                esac
+
+                email_body+=$(cat <<EOF
+        <tr style="background: $row_color;">
+          <td style="padding: 8px; border: 1px solid #dee2e6;"><code>$ip</code></td>
+          <td style="padding: 8px; border: 1px solid #dee2e6;">$count</td>
+          <td style="padding: 8px; border: 1px solid #dee2e6;"><span style="font-weight: bold; color: $([ "$severity" = "CRITICAL" ] && echo "#d32f2f" || [ "$severity" = "WARNING" ] && echo "#f57c00" || echo "#2196F3");">$severity</span></td>
+          <td style="padding: 8px; border: 1px solid #dee2e6; font-family: monospace; font-size: 0.9em;">$display_msg</td>
+        </tr>
+EOF
+)
+            fi
+        done
+
+        email_body+=$(cat <<'EOF'
+      </tbody>
+    </table>
+  </details>
+</div>
+EOF
+)
+        echo "✓ CHECKPOINT: Added low priority section with $low_priority_count IPs" >&2
+    fi
+
     email_body+=$(cat <<'EOF'
 <hr>
 <h2>📋 Full Log Entries</h2>
@@ -1087,7 +1162,7 @@ EOF
 
     {
         echo "From: $from_name <$from_email>"
-        echo "Subject: M.A.I.L-Sentinel Report: $critical_count Critical, $warning_count Warning, $info_count Info - $(hostname)"
+        echo "Subject: 🛡️ M.A.I.L-Sentinel Report: $critical_count Critical, $warning_count Warning, $info_count Info - $(hostname)"
         echo "MIME-Version: 1.0"
         echo "Content-Type: text/html; charset=UTF-8"
         echo
