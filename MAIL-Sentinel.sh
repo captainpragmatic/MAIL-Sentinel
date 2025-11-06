@@ -207,7 +207,7 @@ get_ip_intelligence() {
     local asn="unknown"
     local country="unknown"
 
-    if [ "$ip" = "unknown" ] || [ -z "$ip" ]; then
+    if [ "$ip" = "unknown" ] || [ "$ip" = "internal" ] || [ -z "$ip" ]; then
         echo "unknown|unknown|unknown"
         return 0
     fi
@@ -730,7 +730,9 @@ for logfile in "${logfiles[@]}"; do
                 if [ -n "$candidate" ]; then
                     ip="$candidate"
                 else
-                    ip="unknown"
+                    # No IP found - mark as internal error
+                    ip="internal"
+                    debug_log "Marking error as internal (no IP): ${line:0:100}"
                 fi
             fi
 
@@ -794,8 +796,8 @@ if [ "$send_immediately" = false ] && (( ${#errors[@]} > 0 )); then
         ((++ip_counter))
         echo "  → [$(date '+%H:%M:%S')] Processing IP $ip_counter/${#ip_errors_count[@]}: $ip" >&2
 
-        # Validate IP format (allow IPv4 or "unknown")
-        if ! [[ "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$|^unknown$ ]]; then
+        # Validate IP format (IPv4 or "internal")
+        if ! [[ "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$|^internal$ ]]; then
             echo "    ⚠ WARNING: Invalid IP format detected: '$ip' - skipping" >&2
             continue
         fi
@@ -973,42 +975,60 @@ EOF
                 *) card_class="error-card" badge_class="badge-warning" ;;
             esac
 
-            # Get IP intelligence
-            if [ -n "${ip_intelligence_cache[$ip]+isset}" ]; then
-                ip_intel="${ip_intelligence_cache[$ip]}"
+            # Handle internal errors differently (no IP intelligence, AI, or automation)
+            if [ "$ip" = "internal" ]; then
+                # Internal server errors - simplified card
+                hostname="N/A"
+                asn="N/A"
+                country="N/A"
+                recommendation="⚠️ This is an internal server error not associated with a specific IP address."
+                commands="# Review server configuration:\njournalctl -u postfix -n 100\n\n# Check TLS configuration:\npostconf | grep tls"
+                decision_guide="<strong>📌 INTERNAL ERROR GUIDANCE:</strong><p>This error originates from the mail server itself, not from a remote connection. Check server configuration, SSL/TLS settings, and system logs.</p>"
             else
-                ip_intel=$(get_ip_intelligence "$ip")
-                ip_intelligence_cache["$ip"]="$ip_intel"
-            fi
-            IFS='|' read -r hostname asn country <<< "$ip_intel"
+                # Regular IP-based errors - full analysis
+                # Get IP intelligence
+                if [ -n "${ip_intelligence_cache[$ip]+isset}" ]; then
+                    ip_intel="${ip_intelligence_cache[$ip]}"
+                else
+                    ip_intel=$(get_ip_intelligence "$ip")
+                    ip_intelligence_cache["$ip"]="$ip_intel"
+                fi
+                IFS='|' read -r hostname asn country <<< "$ip_intel"
 
-            # Get AI recommendation if within limit
-            if [ "$api_call_count" -lt "$API_CALL_LIMIT" ]; then
-                debug_log "Making API call for: $summary_line"
-                recommendation=$(get_fix_recommendation "$summary_line")
-                (( ++api_call_count ))
-                debug_log "api_call_count is now: $api_call_count"
-            else
-                recommendation="⚠️ Recommendation unavailable: API rate limit reached ($API_CALL_LIMIT max per report)."
-            fi
+                # Get AI recommendation if within limit
+                if [ "$api_call_count" -lt "$API_CALL_LIMIT" ]; then
+                    debug_log "Making API call for: $summary_line"
+                    recommendation=$(get_fix_recommendation "$summary_line")
+                    (( ++api_call_count ))
+                    debug_log "api_call_count is now: $api_call_count"
+                else
+                    recommendation="⚠️ Recommendation unavailable: API rate limit reached ($API_CALL_LIMIT max per report)."
+                fi
 
-            # Get command suggestions and decision guide
-            commands=$(get_command_suggestions "$sample_msg" "$ip")
+                # Get command suggestions and decision guide
+                commands=$(get_command_suggestions "$sample_msg" "$ip")
 
-            # Use automated analysis for SSL/TLS errors if enabled, otherwise use static guide
-            if [ "${ENABLE_SSL_AUTOMATION:-true}" = "true" ] && grep -qiE "SSL_accept|TLS" <<< "$sample_msg" 2>/dev/null; then
-                debug_log "Using automated SSL/TLS analysis for $ip"
-                decision_guide=$(get_automated_ssl_analysis "$ip" "$hostname" "$count" "$sample_msg")
-            else
-                decision_guide=$(get_decision_guide "$sample_msg")
+                # Use automated analysis for SSL/TLS errors if enabled, otherwise use static guide
+                if [ "${ENABLE_SSL_AUTOMATION:-true}" = "true" ] && grep -qiE "SSL_accept|TLS" <<< "$sample_msg" 2>/dev/null; then
+                    debug_log "Using automated SSL/TLS analysis for $ip"
+                    decision_guide=$(get_automated_ssl_analysis "$ip" "$hostname" "$count" "$sample_msg")
+                else
+                    decision_guide=$(get_decision_guide "$sample_msg")
+                fi
             fi
 
             # Build the error card
+            if [ "$ip" = "internal" ]; then
+                header_text="⚙️ Internal Server Error"
+            else
+                header_text="🔴 Error from IP: <strong>$ip</strong>"
+            fi
+
             email_body+=$(cat <<EOF
 
 <div class="$card_class">
   <div class="error-header">
-    <span>🔴 Error from IP: <strong>$ip</strong></span>
+    <span>$header_text</span>
     <span class="severity-badge $badge_class">$severity</span>
   </div>
 
@@ -1022,14 +1042,14 @@ EOF
   </div>
 
   <div class="ip-intel">
-    <strong>🔍 IP Intelligence:</strong><br>
+    <strong>$([ "$ip" = "internal" ] && echo "⚙️ Server Information:" || echo "🔍 IP Intelligence:")</strong><br>
     📍 Hostname: $hostname<br>
     🌐 ASN: $asn<br>
     🌍 Country: $country
   </div>
 
   <div class="recommendation">
-    <strong>🤖 AI Recommendation:</strong><br>
+    <strong>🤖 $([ "$ip" = "internal" ] && echo "Guidance:" || echo "AI Recommendation:")</strong><br>
     <div style="margin-top: 8px;">$recommendation</div>
   </div>
 
@@ -1044,10 +1064,10 @@ EOF
   <div style="margin-top: 15px;">
     <strong>✅ Action Checklist:</strong>
     <ul class="checklist">
-      <li>Review IP intelligence and determine if source is legitimate or malicious</li>
+      $([ "$ip" = "internal" ] && echo "<li>Review server configuration and system logs</li>" || echo "<li>Review IP intelligence and determine if source is legitimate or malicious</li>")
       <li>Run the suggested commands to investigate further</li>
-      <li>Take appropriate action (whitelist, block, or configure)</li>
-      <li>Monitor for recurring patterns from this IP</li>
+      $([ "$ip" = "internal" ] && echo "<li>Check SSL/TLS certificates and Postfix configuration</li>" || echo "<li>Take appropriate action (whitelist, block, or configure)</li>")
+      $([ "$ip" = "internal" ] && echo "<li>Monitor server logs for related errors</li>" || echo "<li>Monitor for recurring patterns from this IP</li>")
     </ul>
   </div>
 </div>
