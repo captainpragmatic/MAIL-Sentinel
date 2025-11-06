@@ -483,6 +483,8 @@ check_successful_tls_connections() {
                        tail -100 | \
                        wc -l)
         set -e
+        # Sanitize output - ensure it's a clean integer
+        success_count=$(echo "$success_count" | tr -d ' \n\r' | grep -oE '^[0-9]+$' || echo 0)
     fi
 
     echo "$success_count"
@@ -499,7 +501,10 @@ check_ip_history() {
         [ -f "$logfile" ] || continue
         set +e
         local count
-        count=$(grep "$ip" "$logfile" 2>/dev/null | grep -cE "status=sent|delivered" 2>/dev/null || echo 0)
+        count=$(grep "$ip" "$logfile" 2>/dev/null | grep -cE "status=sent|delivered" 2>/dev/null)
+        # Ensure count is a valid integer, default to 0
+        count=${count:-0}
+        count=$(echo "$count" | tr -d '\n\r' | grep -oE '^[0-9]+$' || echo 0)
         success_count=$(( success_count + count ))
         set -e
         [ "$success_count" -gt 0 ] && break
@@ -593,14 +598,16 @@ get_automated_ssl_analysis() {
     fi
 
     # Check 3: Successful TLS from other IPs
+    local tls_success_count=0
     if [ "${ENABLE_LOG_PATTERN_ANALYSIS:-true}" = "true" ]; then
-        local success_count
-        success_count=$(check_successful_tls_connections "$ip")
+        tls_success_count=$(check_successful_tls_connections "$ip")
+        # Ensure it's a valid integer
+        tls_success_count=${tls_success_count:-0}
 
         output+="<div style='margin: 8px 0;'>"
-        output+="✅ <strong>Check 3:</strong> Recent successful TLS connections: $success_count<br>"
+        output+="✅ <strong>Check 3:</strong> Recent successful TLS connections: $tls_success_count<br>"
 
-        if [ "$success_count" -eq 0 ]; then
+        if [ "$tls_success_count" -eq 0 ]; then
             output+="<span style='color: #d32f2f; font-weight: bold;'>🔴 CRITICAL: No successful TLS connections found!</span><br>"
             output+="<span style='font-size: 0.9em;'>This suggests a global SSL/TLS configuration problem.</span>"
         else
@@ -610,13 +617,13 @@ get_automated_ssl_analysis() {
     fi
 
     # Check 4: IP history
-    local has_history success_count
-    IFS='|' read -r has_history success_count <<< "$(check_ip_history "$ip")"
+    local has_history history_count
+    IFS='|' read -r has_history history_count <<< "$(check_ip_history "$ip")"
 
     output+="<div style='margin: 8px 0;'>"
     output+="✅ <strong>Check 4:</strong> Historical delivery success: "
     if [ "$has_history" = "true" ]; then
-        output+="<span style='color: #388e3c;'>YES ($success_count deliveries)</span><br>"
+        output+="<span style='color: #388e3c;'>YES ($history_count deliveries)</span><br>"
         output+="<span style='font-size: 0.9em;'>This IP has successfully delivered mail before. Recent SSL errors may indicate a new issue.</span>"
     else
         output+="<span style='color: #f57c00;'>NO</span><br>"
@@ -650,7 +657,7 @@ get_automated_ssl_analysis() {
     # Decision logic
     if [ "$is_known" = "true" ] && [ "$cert_status" = "expired" ]; then
         output+="<strong style='color: #d32f2f;'>URGENT ACTION REQUIRED:</strong> Certificate expired. Renew immediately to restore mail flow from major providers."
-    elif [ "$success_count" -eq 0 ]; then
+    elif [ "$tls_success_count" -eq 0 ]; then
         output+="<strong style='color: #d32f2f;'>URGENT:</strong> Global SSL/TLS failure detected. Fix server configuration immediately."
     elif [ "$scanner_confidence" -ge 70 ]; then
         output+="<strong style='color: #f57c00;'>RECOMMENDED:</strong> Block this IP (high scanner probability)."
