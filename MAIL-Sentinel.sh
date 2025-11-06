@@ -1340,6 +1340,9 @@ if [ "$send_immediately" = false ] && (( ${#errors[@]} > 0 )); then
     .full-logs { background-color: #f8f9fa; padding: 15px; border-radius: 5px; }
     .log-entry { font-family: 'Courier New', monospace; font-size: 12px; padding: 8px; background-color: #fff; border: 1px solid #dee2e6; border-radius: 3px; margin: 5px 0; word-wrap: break-word; }
     .footer { text-align: center; color: #7f8c8d; font-size: 12px; margin-top: 30px; padding-top: 20px; border-top: 1px solid #ddd; }
+    .low-priority-table { width: 100%; margin-top: 15px; border-collapse: collapse; display: none; }
+    .low-priority-toggle { cursor: pointer; color: #007bff; font-weight: bold; text-decoration: underline; user-select: none; }
+    .low-priority-toggle:hover { color: #0056b3; }
   </style>
 </head>
 <body>
@@ -1600,13 +1603,14 @@ postconf -n"
     done
 
     if [ "$low_priority_count" -gt 0 ]; then
-        email_body+=$(cat <<EOF
+        email_body+=$(cat <<'LOWPRIORITY'
 
 <hr>
 <h2>📊 Low Priority Errors</h2>
 <div style="background: #f8f9fa; padding: 15px; border-radius: 5px; border-left: 4px solid #6c757d;">
   <p><strong>$low_priority_count IP(s)</strong> with 2-$((ERROR_THRESHOLD - 1)) errors (below detailed analysis threshold). Single-occurrence IPs are excluded.</p>
-  <table style="width: 100%; margin-top: 15px; border-collapse: collapse;">
+  <p><span onclick="var t=document.getElementById('lowPriorityTable'); t.style.display=(t.style.display=='none')?'table':'none'; this.textContent=(t.style.display=='none')?'▶ Click to expand low priority errors':'▼ Click to collapse low priority errors';" class="low-priority-toggle">▶ Click to expand low priority errors</span></p>
+  <table id="lowPriorityTable" style="width: 100%; margin-top: 15px; border-collapse: collapse; display: none;">
     <thead>
       <tr style="background: #e9ecef;">
         <th style="padding: 8px; text-align: left; border: 1px solid #dee2e6;">IP Address</th>
@@ -1616,8 +1620,11 @@ postconf -n"
       </tr>
     </thead>
     <tbody>
-EOF
+LOWPRIORITY
 )
+        # Now substitute the variables
+        email_body="${email_body//\$low_priority_count/$low_priority_count}"
+        email_body="${email_body//\$((ERROR_THRESHOLD - 1))/$((ERROR_THRESHOLD - 1))}"
 
         # Add low priority IPs to table
         for ip in "${critical_ips[@]}" "${warning_ips[@]}" "${info_ips[@]}"; do
