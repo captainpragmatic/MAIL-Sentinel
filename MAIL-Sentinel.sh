@@ -1222,7 +1222,7 @@ for logfile in "${logfiles[@]}"; do
             if [ "$send_immediately" = true ]; then
                 # Send email immediately using sendmail
                 {
-                    echo "Subject: M.A.I.L-Sentinel Report for $(date)"
+                    echo "Subject: M.A.I.L-Sentinel Report [$(date '+%Y-%m-%d %H:%M')]"
                     echo "MIME-Version: 1.0"
                     echo "Content-Type: text/plain; charset=UTF-8"
                     echo
@@ -1717,7 +1717,7 @@ EOF
 
     {
         echo "From: $from_name <$from_email>"
-        echo "Subject: 🛡️ M.A.I.L-Sentinel Report: $critical_count Critical, $warning_count Warning, $info_count Info - $(hostname)"
+        echo "Subject: 🛡️ M.A.I.L-Sentinel Report [$(date '+%Y-%m-%d')]: $critical_count Critical, $warning_count Warning, $info_count Info - $(hostname)"
         echo "MIME-Version: 1.0"
         echo "Content-Type: text/html; charset=UTF-8"
         echo
