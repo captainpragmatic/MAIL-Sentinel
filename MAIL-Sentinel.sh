@@ -38,9 +38,32 @@
 #
 # ###############################################################
 set -euo pipefail
+shopt -s inherit_errexit  # Bash 4.4+ - propagate errors from command substitution
+shopt -s nullglob         # Empty glob expansions instead of literal strings
 
-# Trap to detect unexpected termination (only on errors)
-trap 'echo "✗ FATAL: Script terminated unexpectedly at line $LINENO with exit code $?" >&2' ERR
+# Cleanup function called on exit
+cleanup() {
+    local exit_code=$?
+    # Add any cleanup operations here if needed (temp files, etc.)
+    # For now, just ensure we exit cleanly
+    return $exit_code
+}
+
+# Error handler with better context
+handle_error() {
+    local exit_code=$?
+    local line_no=$1
+    echo "✗ FATAL: Error at line $line_no (exit code: $exit_code)" >&2
+    echo "  Function: ${FUNCNAME[2]:-main}" >&2
+    echo "  Command: $BASH_COMMAND" >&2
+    exit $exit_code
+}
+
+# Setup traps
+trap cleanup EXIT
+trap 'handle_error $LINENO' ERR
+trap 'echo "⚠ Script interrupted by user (SIGINT)" >&2; exit 130' INT
+trap 'echo "⚠ Script terminated (SIGTERM)" >&2; exit 143' TERM
 
 # Source secure configuration if it exists.
 # shellcheck disable=SC1091
@@ -77,8 +100,8 @@ pattern="NOQUEUE|bounced|deferred|error|bounce|failed"
 # Single regex for ignored patterns
 ignored_pattern="SASL LOGIN|SSL_accept\\(\\)"
 
-# List of log files to scan
-logfiles=( "/var/log/mail.log" "/var/log/mail.err" "/var/log/procmail.log" )
+# List of log files to scan (procmail.log excluded - it's a delivery log, not an error log)
+logfiles=( "/var/log/mail.log" "/var/log/mail.err" )
 
 # Arrays for collecting full error lines and for grouping by IP
 errors=()
@@ -170,24 +193,43 @@ get_ip_intelligence() {
     local asn="unknown"
     local country="unknown"
 
-    if [ "$ip" = "unknown" ]; then
-        echo "Unknown IP"
-        return
+    if [ "$ip" = "unknown" ] || [ -z "$ip" ]; then
+        echo "unknown|unknown|unknown"
+        return 0
     fi
 
-    # Try to get hostname
-    hostname=$(host "$ip" 2>/dev/null | grep "domain name pointer" | awk '{print $NF}' | sed 's/\.$//' || echo "unknown")
+    # Validate IP format
+    if ! [[ "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+        debug_log "Invalid IP format for intelligence lookup: $ip"
+        echo "unknown|unknown|unknown"
+        return 0
+    fi
 
-    # Try to get ASN and country info from a simple whois lookup
+    # Try to get hostname with timeout
+    set +e  # Disable exit on error temporarily
+    local host_output
+    host_output=$(timeout 3 host "$ip" 2>/dev/null)
+    if [ $? -eq 0 ] && [ -n "$host_output" ]; then
+        hostname=$(grep "domain name pointer" <<< "$host_output" | awk '{print $NF}' | sed 's/\.$//' 2>/dev/null || echo "unknown")
+    fi
+    set -e
+
+    # Try to get ASN and country info from whois with timeout
+    set +e
     local whois_output
-    whois_output=$(timeout 5 whois "$ip" 2>/dev/null || echo "")
+    whois_output=$(timeout 5 whois "$ip" 2>/dev/null)
+    local whois_exit=$?
+    set -e
 
-    if [ -n "$whois_output" ]; then
-        asn=$(echo "$whois_output" | grep -iE "^(origin|originas):" | head -1 | awk '{print $NF}' || echo "unknown")
-        country=$(echo "$whois_output" | grep -i "^country:" | head -1 | awk '{print $NF}' || echo "unknown")
+    if [ $whois_exit -eq 0 ] && [ -n "$whois_output" ]; then
+        asn=$(grep -iE "^(origin|originas):" <<< "$whois_output" 2>/dev/null | head -1 | awk '{print $NF}' || echo "unknown")
+        country=$(grep -i "^country:" <<< "$whois_output" 2>/dev/null | head -1 | awk '{print $NF}' || echo "unknown")
+    elif [ $whois_exit -eq 124 ]; then
+        debug_log "whois timeout for IP: $ip"
     fi
 
-    echo "$hostname|$asn|$country"
+    echo "${hostname:-unknown}|${asn:-unknown}|${country:-unknown}"
+    return 0
 }
 
 # Categorize error severity
@@ -197,29 +239,42 @@ categorize_severity() {
 
     debug_log "categorize_severity called with count=$count"
 
+    # Input validation
+    if [ -z "$error_line" ]; then
+        debug_log "Empty error_line provided"
+        echo "INFO"
+        return 0
+    fi
+
+    if ! [[ "$count" =~ ^[0-9]+$ ]]; then
+        debug_log "Invalid count value: $count - defaulting to 0"
+        count=0
+    fi
+
     # Check if it matches known safe patterns (INFO level)
-    if echo "$error_line" | grep -qE "$KNOWN_SAFE_PATTERNS"; then
+    # Using grep with here-string (safer than pipe) and timeout
+    if timeout 2 grep -qE "$KNOWN_SAFE_PATTERNS" <<< "$error_line" 2>/dev/null; then
         debug_log "Matched KNOWN_SAFE_PATTERNS"
         echo "INFO"
-        return
+        return 0
     fi
 
     # Critical: authentication failures, service disruptions, delivery failures
-    if echo "$error_line" | grep -qiE "authentication failed|service unavailable|queue file write error|disk full|fatal"; then
+    if timeout 2 grep -qiE "authentication failed|service unavailable|queue file write error|disk full|fatal" <<< "$error_line" 2>/dev/null; then
         debug_log "Matched CRITICAL pattern"
         echo "CRITICAL"
-        return
+        return 0
     fi
 
     # Warning: SSL errors, connection issues, bounces, deferred
-    if echo "$error_line" | grep -qiE "SSL_accept|TLS|connection reset|bounced|deferred|timeout"; then
+    if timeout 2 grep -qiE "SSL_accept|TLS|connection reset|bounced|deferred|timeout" <<< "$error_line" 2>/dev/null; then
         debug_log "Matched WARNING/INFO pattern"
         if [ "$count" -gt 10 ]; then
             echo "WARNING"
         else
             echo "INFO"
         fi
-        return
+        return 0
     fi
 
     # Default to INFO for low-count errors
@@ -229,6 +284,7 @@ categorize_severity() {
     else
         echo "WARNING"
     fi
+    return 0
 }
 
 # Generate specific command suggestions based on error type
@@ -237,7 +293,7 @@ get_command_suggestions() {
     local ip="$2"
     local commands=""
 
-    if echo "$error_line" | grep -qiE "SSL_accept|TLS"; then
+    if grep -qiE "SSL_accept|TLS" <<< "$error_line" 2>/dev/null; then
         commands+="# Test SSL certificate:\n"
         commands+="echo | openssl s_client -connect \$(hostname):25 -starttls smtp 2>/dev/null | openssl x509 -noout -dates\n\n"
         commands+="# Check certificate expiry:\n"
@@ -246,7 +302,7 @@ get_command_suggestions() {
         commands+="postconf smtpd_tls_security_level smtpd_tls_protocols\n\n"
     fi
 
-    if echo "$error_line" | grep -qiE "connection reset|refused|timeout"; then
+    if grep -qiE "connection reset|refused|timeout" <<< "$error_line" 2>/dev/null; then
         commands+="# Check if IP is on blocklists:\n"
         commands+="# Visit: https://mxtoolbox.com/SuperTool.aspx?action=blacklist%3a$ip\n\n"
         commands+="# Block this IP with fail2ban (if malicious):\n"
@@ -255,7 +311,7 @@ get_command_suggestions() {
         commands+="ufw deny from $ip\n\n"
     fi
 
-    if echo "$error_line" | grep -qiE "authentication failed"; then
+    if grep -qiE "authentication failed" <<< "$error_line" 2>/dev/null; then
         commands+="# Review authentication logs:\n"
         commands+="grep '$ip' /var/log/mail.log | grep -i auth\n\n"
         commands+="# Check SASL configuration:\n"
@@ -273,7 +329,7 @@ get_command_suggestions() {
 get_decision_guide() {
     local error_line="$1"
 
-    if echo "$error_line" | grep -qiE "SSL_accept|TLS"; then
+    if grep -qiE "SSL_accept|TLS" <<< "$error_line" 2>/dev/null; then
         cat <<'EOF'
 <strong>📌 DECISION GUIDE FOR SSL/TLS ERRORS:</strong>
 <ol style="margin: 10px 0; padding-left: 20px;">
@@ -288,7 +344,7 @@ get_decision_guide() {
   <li><strong>NO</strong> → Normal background noise. Monitor but no action needed.</li></ul></li>
 </ol>
 EOF
-    elif echo "$error_line" | grep -qiE "connection reset|refused"; then
+    elif grep -qiE "connection reset|refused" <<< "$error_line" 2>/dev/null; then
         cat <<'EOF'
 <strong>📌 DECISION GUIDE FOR CONNECTION ERRORS:</strong>
 <ol style="margin: 10px 0; padding-left: 20px;">
@@ -322,6 +378,9 @@ for logfile in "${logfiles[@]}"; do
     # Replace the while read loop with a mapfile loop to avoid subshell side effects:
     mapfile -t lines < <(tac "$logfile")
     for line in "${lines[@]}"; do
+        # Skip empty lines and continuation lines (starting with whitespace)
+        [[ -z "$line" || "$line" =~ ^[[:space:]] ]] && continue
+
         # Extract timestamp and pre-process it (using the first field only)
         ts=$(echo "$line" | awk '{print $1}')
         if [[ "$ts" =~ ^Time: ]]; then
@@ -332,25 +391,25 @@ for logfile in "${logfiles[@]}"; do
             log_epoch=$(date --date="$ts_fixed" +%s 2>/dev/null || true)
         fi
         if [[ -z "$log_epoch" ]]; then
-            echo "Warning: Failed to convert timestamp from line: $line" >&2
+            debug_log "Failed to convert timestamp from line: $line"
             continue
         fi
         if [ "$log_epoch" -lt "$cutoff_epoch" ]; then
             break
         fi
 
-        # Skip lines matching the ignored patterns
-        if echo "$line" | grep -Ei "$ignored_pattern" >/dev/null; then
+        # Skip lines matching the ignored patterns (using here-string instead of pipe)
+        if grep -Ei "$ignored_pattern" <<< "$line" >/dev/null 2>&1; then
             continue
         fi
 
-        # Check if the line contains flagged patterns
-        if echo "$line" | grep -Ei "$pattern" >/dev/null; then
+        # Check if the line contains flagged patterns (using here-string instead of pipe)
+        if grep -Ei "$pattern" <<< "$line" >/dev/null 2>&1; then
             # Extract remote IP using primary regex (assuming it is preceded by "rip=")
-            ip=$(echo "$line" | grep -oP 'rip=\K[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' || true)
+            ip=$(grep -oP 'rip=\K[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' <<< "$line" 2>/dev/null || true)
             if [ -z "$ip" ]; then
                 # Fallback: extract the first valid IPv4 address found in the line
-                candidate=$(echo "$line" | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' | head -n 1 || true)
+                candidate=$(grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' <<< "$line" 2>/dev/null | head -n 1 || true)
                 if [ -n "$candidate" ]; then
                     ip="$candidate"
                 else
@@ -395,6 +454,21 @@ if [ "$send_immediately" = false ] && (( ${#errors[@]} > 0 )); then
         echo "✓ CHECKPOINT: Found ${#errors[@]} total errors from ${#ip_errors_count[@]} unique IPs"
         echo "✓ CHECKPOINT: Starting severity categorization at $(date '+%H:%M:%S')..."
     } >&2
+
+    # Validate arrays before processing
+    if [ ${#ip_errors_count[@]} -eq 0 ]; then
+        echo "⚠ WARNING: ip_errors_count array is empty despite having errors - this is unexpected" >&2
+        echo "ℹ INFO: Skipping email generation" >&2
+        exit 0
+    fi
+
+    if [ ${#ip_errors_count[@]} -ne ${#ip_errors_sample[@]} ]; then
+        echo "⚠ WARNING: Array size mismatch detected!" >&2
+        echo "  ip_errors_count: ${#ip_errors_count[@]} entries" >&2
+        echo "  ip_errors_sample: ${#ip_errors_sample[@]} entries" >&2
+        echo "  Continuing with caution..." >&2
+    fi
+
     # Recategorize severity based on final counts and count by severity
     echo "✓ CHECKPOINT: About to start loop over ${#ip_errors_count[@]} IPs..." >&2
     ip_counter=0
@@ -402,15 +476,43 @@ if [ "$send_immediately" = false ] && (( ${#errors[@]} > 0 )); then
     for ip in "${!ip_errors_count[@]}"; do
         ((++ip_counter))
         echo "  → [$(date '+%H:%M:%S')] Processing IP $ip_counter/${#ip_errors_count[@]}: $ip" >&2
+
+        # Validate IP format (allow IPv4 or "unknown")
+        if ! [[ "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$|^unknown$ ]]; then
+            echo "    ⚠ WARNING: Invalid IP format detected: '$ip' - skipping" >&2
+            continue
+        fi
+
+        # Check if this IP has a sample message
+        if [ -z "${ip_errors_sample[$ip]+isset}" ]; then
+            echo "    ⚠ WARNING: IP $ip missing from sample array - skipping" >&2
+            continue
+        fi
+
         count=${ip_errors_count[$ip]:-0}
         sample_msg=${ip_errors_sample[$ip]:-"No sample message"}
 
         echo "    Count: $count, calling categorize_severity..." >&2
-        severity=$(categorize_severity "$sample_msg" "$count" 2>&1) || {
-            echo "    ✗ ERROR: categorize_severity failed for IP $ip" >&2
+        # Call categorize_severity with error protection
+        # Note: timeout within the function (grep calls) provides timeout protection
+        set +e  # Temporarily disable exit on error for this block
+        severity=$(categorize_severity "$sample_msg" "$count" 2>&1)
+        local cat_exit_code=$?
+        set -e  # Re-enable exit on error
+
+        if [ $cat_exit_code -eq 0 ]; then
+            echo "    Severity: $severity" >&2
+        else
+            echo "    ✗ ERROR: categorize_severity failed (exit code: $cat_exit_code) for IP $ip" >&2
             severity="INFO"
-        }
-        echo "    Severity: $severity" >&2
+            echo "    Severity: $severity (fallback)" >&2
+        fi
+
+        # Validate severity value
+        if ! [[ "$severity" =~ ^(CRITICAL|WARNING|INFO)$ ]]; then
+            echo "    ⚠ WARNING: Invalid severity '$severity' for IP $ip - defaulting to INFO" >&2
+            severity="INFO"
+        fi
 
         ip_errors_severity["$ip"]="$severity"
 
