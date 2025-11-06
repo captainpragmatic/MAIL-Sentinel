@@ -453,8 +453,8 @@ get_command_suggestions() {
             commands+="# fail2ban not available or no mail jails configured\n\n"
         fi
 
-        commands+="# Or block with UFW:\n"
-        commands+="ufw deny from $ip\n\n"
+        commands+="# Or block with iptables:\n"
+        commands+="iptables -A INPUT -s $ip -j DROP\n\n"
     fi
 
     if grep -qiE "authentication failed" <<< "$error_line" 2>/dev/null; then
