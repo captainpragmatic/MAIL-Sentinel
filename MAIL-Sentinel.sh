@@ -1123,22 +1123,7 @@ EOF
         echo "✓ CHECKPOINT: Added low priority section with $low_priority_count IPs" >&2
     fi
 
-    email_body+=$(cat <<'EOF'
-<hr>
-<h2>📋 Full Log Entries</h2>
-<div class="full-logs">
-  <p>Below are all error log entries captured in this report for reference:</p>
-EOF
-)
-    # Append each full error log entry
-    for err in "${errors[@]}"; do
-        email_body+=$(cat <<EOF
-<div class="log-entry">${err}</div>
-EOF
-)
-    done
     email_body+=$(cat <<EOF
-</div>
 
 <div class="footer">
   <p>🛡️ This is an automated report from <strong>M.A.I.L. Sentinel</strong> (My Artificial Intelligence Log Sentinel)</p>
