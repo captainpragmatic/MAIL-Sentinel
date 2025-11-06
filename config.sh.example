@@ -1,5 +1,21 @@
 #!/bin/bash
 # Secure configuration file for M.A.I.L. Sentinel.
 # Copy this file to config.sh and customize your environment variables.
+
+# Required: Email and API Configuration
 export POSTFIX_REPORT_EMAIL="user@example.com"  # Recipient email
 export OPENAI_API_KEY="your_secure_openai_api_key"  # API key
+
+# Optional: Thresholds and Limits
+export ERROR_THRESHOLD=5           # Minimum error count before sending to OpenAI (default: 5)
+export API_CALL_LIMIT=5           # Maximum API calls per execution (default: 5)
+export TIME_WINDOW_HOURS=24       # Hours of logs to analyze (default: 24)
+export MAX_API_TIMEOUT=30         # OpenAI API timeout in seconds (default: 30)
+export AUTO_IGNORE_THRESHOLD=3    # Ignore IPs with fewer errors than this (default: 3)
+
+# Optional: Debug Mode
+export MAIL_SENTINEL_DEBUG=false  # Set to true for verbose debug output
+
+# Optional: Known Safe Patterns (pipe-separated, no spaces)
+# These patterns will be categorized as INFO level instead of WARNING
+export KNOWN_SAFE_PATTERNS="gaia.bounces.google.com|amazonses.com|mailgun.net|sendgrid.net"
