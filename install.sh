@@ -149,7 +149,7 @@ export OPENAI_API_KEY="$openai_key"  # API key
 export ERROR_THRESHOLD=$error_threshold           # Minimum error count before sending to OpenAI
 export API_CALL_LIMIT=$api_call_limit           # Maximum API calls per execution
 export TIME_WINDOW_HOURS=$time_window_hours       # Hours of logs to analyze
-export MAX_API_TIMEOUT=30         # OpenAI API timeout in seconds
+export MAX_API_TIMEOUT=$max_api_timeout         # OpenAI API timeout in seconds
 export AUTO_IGNORE_THRESHOLD=$auto_ignore_threshold    # Ignore IPs with fewer errors than this
 
 # Optional: Debug Mode
