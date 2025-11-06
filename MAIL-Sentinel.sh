@@ -381,6 +381,8 @@ for logfile in "${logfiles[@]}"; do
 done
 
 if [ "$send_immediately" = false ] && (( ${#errors[@]} > 0 )); then
+    echo "✓ CHECKPOINT: Found ${#errors[@]} total errors from ${#ip_errors_count[@]} unique IPs" >&2
+    echo "✓ CHECKPOINT: Starting severity categorization..." >&2
     # Recategorize severity based on final counts and count by severity
     for ip in "${!ip_errors_count[@]}"; do
         count=${ip_errors_count[$ip]}
@@ -394,8 +396,10 @@ if [ "$send_immediately" = false ] && (( ${#errors[@]} > 0 )); then
             INFO) ((info_count++)) ;;
         esac
     done
+    echo "✓ CHECKPOINT: Severity categorization complete - Critical: $critical_count, Warning: $warning_count, Info: $info_count" >&2
 
     # Build the HTML email body for aggregated errors:
+    echo "✓ CHECKPOINT: Building email body..." >&2
     email_body=$(cat <<EOF
 <!DOCTYPE html>
 <html>
@@ -487,10 +491,12 @@ EOF
   <h2>🔍 Detailed Error Analysis</h2>
 EOF
 )
+    echo "✓ CHECKPOINT: Initial email body built successfully" >&2
 
     # Use a local counter within the loop to limit API calls
     api_call_count=0
     debug_log "Starting aggregated loop; total groups: ${#ip_errors_count[@]}"
+    echo "✓ CHECKPOINT: Processing ${#ip_errors_count[@]} unique IPs for detailed analysis..." >&2
 
     # Sort IPs by severity (Critical, Warning, Info) then by count
     declare -a critical_ips warning_ips info_ips
@@ -504,14 +510,16 @@ EOF
     done
 
     # Process all IPs in order of severity
+    detailed_cards_added=0
     for ip in "${critical_ips[@]}" "${warning_ips[@]}" "${info_ips[@]}"; do
         [ -z "$ip" ] && continue
         count=${ip_errors_count[$ip]}
         sample_msg=${ip_errors_sample[$ip]}
         severity=${ip_errors_severity[$ip]}
 
-        # Only include errors above the threshold
-        if [ "$count" -gt "$ERROR_THRESHOLD" ]; then
+        # Only include errors at or above the threshold
+        if [ "$count" -ge "$ERROR_THRESHOLD" ]; then
+            ((detailed_cards_added++))
             summary_line="$ip: $sample_msg (occurred $count times)"
 
             # Determine card CSS class based on severity
@@ -599,6 +607,12 @@ EOF
         fi
     done
     debug_log "Finished aggregated loop. Total API calls made: $api_call_count"
+    echo "✓ CHECKPOINT: IP processing complete - $detailed_cards_added detailed cards added (threshold: $ERROR_THRESHOLD)" >&2
+
+    # Warn if no cards were added
+    if [ "$detailed_cards_added" -eq 0 ]; then
+        echo "⚠ WARNING: No IPs exceeded threshold of $ERROR_THRESHOLD errors - email will contain executive summary only" >&2
+    fi
 
     email_body+=$(cat <<'EOF'
 <hr>
@@ -631,6 +645,7 @@ EOF
 
     # Log that email is about to be sent
     debug_log "Sending aggregated email with $critical_count critical, $warning_count warning, $info_count info items"
+    echo "✓ CHECKPOINT: Email body complete - sending to $email..." >&2
     {
         echo "Subject: 🛡️ M.A.I.L-Sentinel Report: $critical_count Critical, $warning_count Warning, $info_count Info - $(hostname)"
         echo "MIME-Version: 1.0"
@@ -638,5 +653,16 @@ EOF
         echo
         echo "$email_body"
     } | sendmail "$email"
-    debug_log "Aggregated email sent successfully"
+
+    sendmail_exit=$?
+    if [ $sendmail_exit -eq 0 ]; then
+        debug_log "Aggregated email sent successfully"
+        echo "✓ CHECKPOINT: Email sent successfully to $email" >&2
+    else
+        echo "✗ ERROR: sendmail failed with exit code $sendmail_exit" >&2
+    fi
+else
+    if [ "$send_immediately" = false ]; then
+        echo "ℹ INFO: No errors found in logs within the last $TIME_WINDOW_HOURS hours - no email sent" >&2
+    fi
 fi
