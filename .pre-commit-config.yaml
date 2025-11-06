@@ -1,0 +1,33 @@
+# Pre-commit hooks configuration
+# See https://pre-commit.com for more information
+
+repos:
+  - repo: https://github.com/shellcheck-py/shellcheck-py
+    rev: v0.10.0.1
+    hooks:
+      - id: shellcheck
+        name: ShellCheck
+        description: Run ShellCheck on bash scripts
+        args: ['--severity=warning']
+        files: \.(sh|bash)$
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.5.0
+    hooks:
+      - id: check-added-large-files
+        name: Check for large files
+        description: Prevent accidentally committing large files
+        args: ['--maxkb=500']
+
+      - id: check-merge-conflict
+        name: Check for merge conflicts
+        description: Check for files that contain merge conflict strings
+
+      - id: end-of-file-fixer
+        name: Fix end of files
+        description: Ensures files end with a newline
+
+      - id: trailing-whitespace
+        name: Trim trailing whitespace
+        description: Trims trailing whitespace
+        args: [--markdown-linebreak-ext=md]
