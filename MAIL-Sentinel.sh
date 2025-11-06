@@ -572,10 +572,9 @@ get_command_suggestions() {
     local ip="$2"
     local commands=""
 
-    # SSL/TLS errors: no manual commands needed - automation handles all checks
-    # (certificate validity, expiry, successful connections, scanner detection)
-
-    if grep -qiE "connection reset|refused|timeout" <<< "$error_line" 2>/dev/null; then
+    # Show blocking commands for connection errors and SSL/TLS errors
+    # Automation handles analysis, but user still needs blocking options
+    if grep -qiE "connection reset|refused|timeout|SSL_accept|TLS|ssl" <<< "$error_line" 2>/dev/null; then
         commands+="# Check if IP is on blocklists:\n"
         commands+="# Visit: https://mxtoolbox.com/SuperTool.aspx?action=blacklist%3a$ip\n\n"
 
