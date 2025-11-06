@@ -724,9 +724,14 @@ diagnose_internal_error() {
     # Check 1: Disk space on mail spool
     set +e
     local disk_usage
-    disk_usage=$(df -h /var/spool/postfix 2>/dev/null | tail -1 | awk '{print $5}' | tr -d '%')
+    disk_usage=$(df -h /var/spool/postfix 2>/dev/null | tail -1 | awk '{print $5}' | tr -d '%' | tr -d '\n\r' | head -c 3)
     local disk_check_exit=$?
     set -e
+
+    # Validate disk_usage is a valid integer
+    if ! [[ "$disk_usage" =~ ^[0-9]+$ ]]; then
+        disk_usage=""
+    fi
 
     output+="<div style='margin: 8px 0;'>"
     output+="✅ <strong>Check 1:</strong> Disk Space - "
@@ -809,14 +814,15 @@ diagnose_internal_error() {
     output+="<div style='margin-top: 15px; padding: 10px; background: #fff3e0; border-left: 4px solid #ff9800;'>"
     output+="<strong>📋 AUTOMATED RECOMMENDATION:</strong><br>"
 
-    # Build recommendation based on findings
-    if [ "$disk_usage" -ge 90 ] || [ "$postfix_active" = "inactive" ] || [ "$postfix_active" = "failed" ]; then
+    # Build recommendation based on findings (use safe defaults for empty values)
+    local disk_usage_safe=${disk_usage:-0}
+    if [ "$disk_usage_safe" -ge 90 ] || [ "$postfix_active" = "inactive" ] || [ "$postfix_active" = "failed" ]; then
         output+="<strong style='color: #d32f2f;'>CRITICAL:</strong> Immediate action required. "
-        [ "$disk_usage" -ge 90 ] && output+="Free disk space. "
+        [ "$disk_usage_safe" -ge 90 ] && output+="Free disk space. "
         [ "$postfix_active" != "active" ] && output+="Start Postfix service. "
-    elif [ "$disk_usage" -ge 75 ] || [ "$queue_count" -gt 100 ]; then
+    elif [ "$disk_usage_safe" -ge 75 ] || [ "$queue_count" -gt 100 ]; then
         output+="<strong style='color: #f57c00;'>WARNING:</strong> Action needed soon. "
-        [ "$disk_usage" -ge 75 ] && output+="Monitor and plan disk cleanup. "
+        [ "$disk_usage_safe" -ge 75 ] && output+="Monitor and plan disk cleanup. "
         [ "$queue_count" -gt 100 ] && output+="Investigate queue backlog. "
     else
         output+="<strong style='color: #388e3c;'>INFO:</strong> System metrics look healthy. Error may be transient or configuration-related. Monitor logs for patterns."
@@ -1264,11 +1270,14 @@ if [ "$send_immediately" = false ] && (( ${#errors[@]} > 0 )); then
 
         ip_errors_severity["$ip"]="$severity"
 
-        case "$severity" in
-            CRITICAL) (( ++critical_count )) ;;
-            WARNING) (( ++warning_count )) ;;
-            INFO) (( ++info_count )) ;;
-        esac
+        # Only count IPs with more than 1 occurrence in executive summary
+        if [ "$count" -gt 1 ]; then
+            case "$severity" in
+                CRITICAL) (( ++critical_count )) ;;
+                WARNING) (( ++warning_count )) ;;
+                INFO) (( ++info_count )) ;;
+            esac
+        fi
     done
     echo "✓ CHECKPOINT: Severity categorization complete - Critical: $critical_count, Warning: $warning_count, Info: $info_count" >&2
 
@@ -1562,12 +1571,12 @@ postconf -n"
         echo "⚠ WARNING: No IPs exceeded threshold of $ERROR_THRESHOLD errors - email will contain executive summary only" >&2
     fi
 
-    # Add Low Priority section for IPs below ERROR_THRESHOLD
+    # Add Low Priority section for IPs below ERROR_THRESHOLD (but more than 1 occurrence)
     low_priority_count=0
     for ip in "${critical_ips[@]}" "${warning_ips[@]}" "${info_ips[@]}"; do
         [ -z "$ip" ] && continue
         count=${ip_errors_count[$ip]:-0}
-        if [ "$count" -lt "$ERROR_THRESHOLD" ] && [ "$count" -gt 0 ]; then
+        if [ "$count" -lt "$ERROR_THRESHOLD" ] && [ "$count" -gt 1 ]; then
             (( ++low_priority_count ))
         fi
     done
@@ -1578,19 +1587,17 @@ postconf -n"
 <hr>
 <h2>📊 Low Priority Errors</h2>
 <div style="background: #f8f9fa; padding: 15px; border-radius: 5px; border-left: 4px solid #6c757d;">
-  <p><strong>$low_priority_count IP(s)</strong> with fewer than $ERROR_THRESHOLD errors (below detailed analysis threshold).</p>
-  <details>
-    <summary style="cursor: pointer; color: #007bff; font-weight: bold;">Click to expand low priority errors</summary>
-    <table style="width: 100%; margin-top: 15px; border-collapse: collapse;">
-      <thead>
-        <tr style="background: #e9ecef;">
-          <th style="padding: 8px; text-align: left; border: 1px solid #dee2e6;">IP Address</th>
-          <th style="padding: 8px; text-align: left; border: 1px solid #dee2e6;">Count</th>
-          <th style="padding: 8px; text-align: left; border: 1px solid #dee2e6;">Severity</th>
-          <th style="padding: 8px; text-align: left; border: 1px solid #dee2e6;">Sample Message</th>
-        </tr>
-      </thead>
-      <tbody>
+  <p><strong>$low_priority_count IP(s)</strong> with 2-$((ERROR_THRESHOLD - 1)) errors (below detailed analysis threshold). Single-occurrence IPs are excluded.</p>
+  <table style="width: 100%; margin-top: 15px; border-collapse: collapse;">
+    <thead>
+      <tr style="background: #e9ecef;">
+        <th style="padding: 8px; text-align: left; border: 1px solid #dee2e6;">IP Address</th>
+        <th style="padding: 8px; text-align: left; border: 1px solid #dee2e6;">Count</th>
+        <th style="padding: 8px; text-align: left; border: 1px solid #dee2e6;">Severity</th>
+        <th style="padding: 8px; text-align: left; border: 1px solid #dee2e6;">Sample Message</th>
+      </tr>
+    </thead>
+    <tbody>
 EOF
 )
 
@@ -1599,7 +1606,7 @@ EOF
             [ -z "$ip" ] && continue
             count=${ip_errors_count[$ip]:-0}
 
-            if [ "$count" -lt "$ERROR_THRESHOLD" ] && [ "$count" -gt 0 ]; then
+            if [ "$count" -lt "$ERROR_THRESHOLD" ] && [ "$count" -gt 1 ]; then
                 sample_msg=${ip_errors_sample[$ip]:-"No sample message"}
                 severity=${ip_errors_severity[$ip]:-INFO}
 
@@ -1628,9 +1635,8 @@ EOF
         done
 
         email_body+=$(cat <<'EOF'
-      </tbody>
-    </table>
-  </details>
+    </tbody>
+  </table>
 </div>
 EOF
 )
