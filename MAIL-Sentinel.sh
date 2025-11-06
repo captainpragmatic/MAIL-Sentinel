@@ -131,6 +131,7 @@ MAX_API_TIMEOUT=${MAX_API_TIMEOUT:-30}
 AUTO_IGNORE_THRESHOLD=${AUTO_IGNORE_THRESHOLD:-3}
 MAIL_SENTINEL_DEBUG=${MAIL_SENTINEL_DEBUG:-false}
 KNOWN_SAFE_PATTERNS=${KNOWN_SAFE_PATTERNS:-"gaia.bounces.google.com|amazonses.com|mailgun.net|sendgrid.net"}
+ENABLE_AI_RECOMMENDATIONS=${ENABLE_AI_RECOMMENDATIONS:-true}
 
 # Helper function for debug logging with timestamps
 debug_log() {
@@ -236,14 +237,14 @@ get_fix_recommendation() {
         payload=$(jq -n --arg model "$model" --arg prompt "$prompt" '{
                             model: $model,
                             messages: [{role: "user", content: $prompt}],
-                            max_completion_tokens: 100,
+                            max_completion_tokens: 200,
                             temperature: 0.4
                         }')
     else
         payload=$(jq -n --arg model "$model" --arg prompt "$prompt" '{
                             model: $model,
                             messages: [{role: "user", content: $prompt}],
-                            max_tokens: 100,
+                            max_tokens: 200,
                             temperature: 0.4
                         }')
     fi
@@ -273,34 +274,37 @@ get_fix_recommendation() {
     fi
 }
 
-# Get IP intelligence information (hostname, ASN, etc.)
+# Get enhanced IP intelligence information
 get_ip_intelligence() {
     local ip="$1"
     local hostname="unknown"
     local asn="unknown"
     local country="unknown"
+    local org="unknown"
+    local network_type="unknown"
+    local blocklist_status="clean"
 
     if [ "$ip" = "unknown" ] || [ "$ip" = "internal" ] || [ -z "$ip" ]; then
-        echo "unknown|unknown|unknown"
+        echo "unknown|unknown|unknown|unknown|unknown|clean"
         return 0
     fi
 
     # Validate IP format
     if ! [[ "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
         debug_log "Invalid IP format for intelligence lookup: $ip"
-        echo "unknown|unknown|unknown"
+        echo "unknown|unknown|unknown|unknown|unknown|clean"
         return 0
     fi
 
     # Try to get hostname with timeout
-    set +e  # Disable exit on error temporarily
+    set +e
     local host_output
     if host_output=$(timeout 3 host "$ip" 2>/dev/null); then
         hostname=$(grep "domain name pointer" <<< "$host_output" | awk '{print $NF}' | sed 's/\.$//' 2>/dev/null || echo "unknown")
     fi
     set -e
 
-    # Try to get ASN and country info from whois with timeout
+    # Try to get ASN, country, and org info from whois with timeout
     set +e
     local whois_output
     whois_output=$(timeout 5 whois "$ip" 2>/dev/null)
@@ -308,13 +312,47 @@ get_ip_intelligence() {
     set -e
 
     if [ "$whois_exit" -eq 0 ] && [ -n "$whois_output" ]; then
-        asn=$(grep -iE "^(origin|originas):" <<< "$whois_output" 2>/dev/null | head -1 | awk '{print $NF}' || echo "unknown")
+        # Parse ASN - try multiple formats
+        asn=$(grep -iE "^(origin|originas):" <<< "$whois_output" 2>/dev/null | head -1 | sed -E 's/^[^:]+:[[:space:]]*//' | grep -oE 'AS[0-9]+|[0-9]+' | head -1 || echo "unknown")
+
+        # Parse country
         country=$(grep -i "^country:" <<< "$whois_output" 2>/dev/null | head -1 | awk '{print $NF}' || echo "unknown")
+
+        # Parse organization/ISP name
+        org=$(grep -iE "^(org-name|orgname|organization|descr):" <<< "$whois_output" 2>/dev/null | head -1 | sed -E 's/^[^:]+:[[:space:]]*//' | head -c 50 || echo "unknown")
+        [ -z "$org" ] && org="unknown"
+
+        # Detect network type based on org name and hostname
+        if grep -qiE "google|amazon|microsoft|cloudflare|digitalocean|linode|vultr|ovh|hetzner" <<< "$org $hostname" 2>/dev/null; then
+            network_type="datacenter"
+        elif grep -qiE "hosting|server|cloud|vps|dedicated" <<< "$org $hostname" 2>/dev/null; then
+            network_type="hosting"
+        elif grep -qiE "comcast|verizon|att|charter|spectrum|cox|centurylink|frontier" <<< "$org $hostname" 2>/dev/null; then
+            network_type="residential"
+        elif grep -qiE "vpn|proxy|tor" <<< "$org $hostname" 2>/dev/null; then
+            network_type="vpn/proxy"
+        else
+            network_type="isp"
+        fi
     elif [ "$whois_exit" -eq 124 ]; then
         debug_log "whois timeout for IP: $ip"
     fi
 
-    echo "${hostname:-unknown}|${asn:-unknown}|${country:-unknown}"
+    # Check public DNS-based blocklists (quick check)
+    set +e
+    local reversed_ip
+    reversed_ip=$(echo "$ip" | awk -F. '{print $4"."$3"."$2"."$1}')
+
+    # Check Spamhaus ZEN (combines multiple blocklists)
+    if timeout 2 host "${reversed_ip}.zen.spamhaus.org" &>/dev/null; then
+        blocklist_status="listed"
+    # Check Barracuda
+    elif timeout 2 host "${reversed_ip}.b.barracudacentral.org" &>/dev/null; then
+        blocklist_status="listed"
+    fi
+    set -e
+
+    echo "${hostname:-unknown}|${asn:-unknown}|${country:-unknown}|${org:-unknown}|${network_type:-unknown}|${blocklist_status:-clean}"
     return 0
 }
 
@@ -1242,19 +1280,31 @@ postconf -n"
                     ip_intel=$(get_ip_intelligence "$ip")
                     ip_intelligence_cache["$ip"]="$ip_intel"
                 fi
-                IFS='|' read -r hostname asn country <<< "$ip_intel"
+                IFS='|' read -r hostname asn country org network_type blocklist_status <<< "$ip_intel"
 
                 # Build automation context summary for AI (if applicable)
                 automation_summary=$(build_automation_summary "$ip" "$hostname" "$count" "$sample_msg")
 
-                # Get AI recommendation if within limit
-                if [ "$api_call_count" -lt "$API_CALL_LIMIT" ]; then
-                    debug_log "Making API call for: $summary_line"
-                    recommendation=$(get_fix_recommendation "$summary_line" "$automation_summary")
-                    (( ++api_call_count ))
-                    debug_log "api_call_count is now: $api_call_count"
+                # Enhance automation summary with IP intelligence
+                if [ -n "$automation_summary" ]; then
+                    automation_summary="$automation_summary IP from: $org ($network_type, $country). Blocklist: $blocklist_status."
                 else
-                    recommendation="⚠️ Recommendation unavailable: API rate limit reached ($API_CALL_LIMIT max per report)."
+                    automation_summary="IP from: $org ($network_type, $country). Blocklist: $blocklist_status."
+                fi
+
+                # Get AI recommendation if enabled and within limit
+                if [ "${ENABLE_AI_RECOMMENDATIONS:-true}" = "true" ]; then
+                    if [ "$api_call_count" -lt "$API_CALL_LIMIT" ]; then
+                        debug_log "Making API call for: $summary_line"
+                        recommendation=$(get_fix_recommendation "$summary_line" "$automation_summary")
+                        (( ++api_call_count ))
+                        debug_log "api_call_count is now: $api_call_count"
+                    else
+                        recommendation="⚠️ Recommendation unavailable: API rate limit reached ($API_CALL_LIMIT max per report)."
+                    fi
+                else
+                    recommendation=""
+                    debug_log "AI recommendations disabled via config"
                 fi
 
                 # Get command suggestions and decision guide
@@ -1296,12 +1346,30 @@ postconf -n"
 
             # Only show IP Intelligence section if hostname is not empty
             if [ -n "$hostname" ]; then
+                # Build blocklist warning
+                blocklist_warning=""
+                if [ "$blocklist_status" = "listed" ]; then
+                    blocklist_warning="<br>⚠️ <span style='color: #d32f2f; font-weight: bold;'>BLOCKLIST: Found on public spam/abuse lists</span>"
+                fi
+
+                # Build network type badge
+                network_badge=""
+                case "$network_type" in
+                    datacenter) network_badge="<span style='background: #2196F3; color: white; padding: 2px 8px; border-radius: 3px; font-size: 11px;'>DATACENTER</span>" ;;
+                    hosting) network_badge="<span style='background: #9c27b0; color: white; padding: 2px 8px; border-radius: 3px; font-size: 11px;'>HOSTING</span>" ;;
+                    residential) network_badge="<span style='background: #4caf50; color: white; padding: 2px 8px; border-radius: 3px; font-size: 11px;'>RESIDENTIAL</span>" ;;
+                    "vpn/proxy") network_badge="<span style='background: #ff5722; color: white; padding: 2px 8px; border-radius: 3px; font-size: 11px;'>VPN/PROXY</span>" ;;
+                    isp) network_badge="<span style='background: #607d8b; color: white; padding: 2px 8px; border-radius: 3px; font-size: 11px;'>ISP</span>" ;;
+                esac
+
                 email_body+="
   <div class=\"ip-intel\">
     <strong>🔍 IP Intelligence:</strong><br>
     📍 Hostname: $hostname<br>
+    🏢 Organization: $org<br>
     🌐 ASN: $asn<br>
-    🌍 Country: $country
+    🌍 Country: $country<br>
+    🔌 Network Type: $network_badge$blocklist_warning
   </div>
 "
             fi

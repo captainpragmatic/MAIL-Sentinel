@@ -21,6 +21,9 @@ export AUTO_IGNORE_THRESHOLD=3    # Ignore IPs with fewer errors than this (defa
 # Optional: Debug Mode
 export MAIL_SENTINEL_DEBUG=false  # Set to true for verbose debug output
 
+# Optional: AI Recommendations
+export ENABLE_AI_RECOMMENDATIONS=true  # Set to false to disable OpenAI API calls for recommendations (default: true)
+
 # Optional: Known Safe Patterns (pipe-separated, no spaces)
 # These patterns will be categorized as INFO level instead of WARNING
 export KNOWN_SAFE_PATTERNS="gaia.bounces.google.com|amazonses.com|mailgun.net|sendgrid.net"
