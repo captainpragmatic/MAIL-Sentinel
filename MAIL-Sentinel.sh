@@ -1101,12 +1101,43 @@ EOF
             # Handle internal errors differently (no IP intelligence, AI, or automation)
             if [ "$ip" = "internal" ]; then
                 # Internal server errors - simplified card
-                hostname="N/A"
-                asn="N/A"
-                country="N/A"
-                recommendation="⚠️ This is an internal server error not associated with a specific IP address."
-                commands="# Review server configuration:\njournalctl -u postfix -n 100\n\n# Check TLS configuration:\npostconf | grep tls"
-                decision_guide="<strong>📌 INTERNAL ERROR GUIDANCE:</strong><p>This error originates from the mail server itself, not from a remote connection. Check server configuration, SSL/TLS settings, and system logs.</p>"
+                hostname=""
+                asn=""
+                country=""
+                recommendation=""
+
+                # Build improved commands with proper formatting
+                commands="# Review server configuration:
+journalctl -u postfix -n 100
+
+# Check TLS configuration:
+postconf | grep tls
+
+# Review mail queue:
+mailq
+
+# Check disk space:
+df -h /var/spool/postfix"
+
+                # Build severity-aware guidance
+                action_needed="⚠️ <strong>ACTION RECOMMENDED</strong>"
+                if [ "$severity" = "CRITICAL" ] || [ "$count" -gt 20 ]; then
+                    action_needed="🔴 <strong>URGENT ACTION REQUIRED</strong>"
+                elif [ "$count" -le 5 ]; then
+                    action_needed="ℹ️ <strong>INFORMATIONAL - Monitor</strong>"
+                fi
+
+                decision_guide="<strong>📌 INTERNAL ERROR GUIDANCE:</strong>
+<div style='margin: 10px 0; padding: 10px; background: #fff3e0; border-left: 4px solid #ff9800;'>
+$action_needed<br><br>
+This error originates from the mail server itself, not from a remote connection.
+<ul style='margin: 10px 0; padding-left: 20px;'>
+<li><strong>Error Count:</strong> $count occurrence(s) - $([ "$count" -gt 20 ] && echo "High frequency suggests systemic issue" || [ "$count" -gt 10 ] && echo "Moderate frequency" || echo "Low frequency")</li>
+<li><strong>Severity:</strong> $severity</li>
+<li><strong>Likely Causes:</strong> Disk space issues, SSL/TLS certificate problems, configuration errors, or service availability</li>
+<li><strong>Next Steps:</strong> Review server logs, check disk space, verify TLS certificates, and ensure Postfix service is running properly</li>
+</ul>
+</div>"
             else
                 # Regular IP-based errors - full analysis
                 # Get IP intelligence
@@ -1150,45 +1181,56 @@ EOF
                 header_text="🔴 Error from IP: <strong>$ip</strong>"
             fi
 
-            email_body+=$(cat <<EOF
-
-<div class="$card_class">
-  <div class="error-header">
+            # Build the card with conditional sections
+            email_body+="
+<div class=\"$card_class\">
+  <div class=\"error-header\">
     <span>$header_text</span>
-    <span class="severity-badge $badge_class">$severity</span>
+    <span class=\"severity-badge $badge_class\">$severity</span>
   </div>
 
-  <div style="margin: 10px 0;">
+  <div style=\"margin: 10px 0;\">
     <strong>Error Message:</strong><br>
-    <code style="background: #f5f5f5; padding: 8px; display: block; border-radius: 3px; margin-top: 5px;">$sample_msg</code>
+    <code style=\"background: #f5f5f5; padding: 8px; display: block; border-radius: 3px; margin-top: 5px;\">$sample_msg</code>
   </div>
 
-  <div style="margin: 10px 0;">
+  <div style=\"margin: 10px 0;\">
     <strong>Occurrences:</strong> $count times in the last $TIME_WINDOW_HOURS hours
   </div>
+"
 
-  <div class="ip-intel">
-    <strong>$([ "$ip" = "internal" ] && echo "⚙️ Server Information:" || echo "🔍 IP Intelligence:")</strong><br>
+            # Only show IP Intelligence section if hostname is not empty
+            if [ -n "$hostname" ]; then
+                email_body+="
+  <div class=\"ip-intel\">
+    <strong>🔍 IP Intelligence:</strong><br>
     📍 Hostname: $hostname<br>
     🌐 ASN: $asn<br>
     🌍 Country: $country
   </div>
+"
+            fi
 
-  <div class="recommendation">
-    <strong>🤖 $([ "$ip" = "internal" ] && echo "Guidance:" || echo "AI Recommendation:")</strong><br>
-    <div style="margin-top: 8px;">$recommendation</div>
+            # Only show AI Recommendation section if recommendation is not empty
+            if [ -n "$recommendation" ]; then
+                email_body+="
+  <div class=\"recommendation\">
+    <strong>🤖 AI Recommendation:</strong><br>
+    <div style=\"margin-top: 8px;\">$recommendation</div>
   </div>
+"
+            fi
 
-  <div class="decision-guide">
+            email_body+="
+  <div class=\"decision-guide\">
     $decision_guide
   </div>
 
-  <div class="commands">
+  <div class=\"commands\">
     <strong>⚡ ACTIONABLE COMMANDS (copy & paste):</strong><br><br>$commands
   </div>
 </div>
-EOF
-)
+"
             debug_log "Added error card for IP $ip with severity $severity"
         fi
     done
