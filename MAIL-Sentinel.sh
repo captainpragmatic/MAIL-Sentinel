@@ -522,6 +522,121 @@ EOF
 # SMART AUTOMATION FUNCTIONS
 # ============================================================================
 
+# Diagnose internal server errors automatically
+diagnose_internal_error() {
+    local sample_msg="$1"
+    local output=""
+
+    output+="<strong>🤖 AUTOMATED DIAGNOSTICS:</strong><br>"
+    output+="<div style='margin: 10px 0; padding: 10px; background: #f0f8ff; border-left: 4px solid #2196F3;'>"
+
+    # Check 1: Disk space on mail spool
+    set +e
+    local disk_usage
+    disk_usage=$(df -h /var/spool/postfix 2>/dev/null | tail -1 | awk '{print $5}' | tr -d '%')
+    local disk_check_exit=$?
+    set -e
+
+    output+="<div style='margin: 8px 0;'>"
+    output+="✅ <strong>Check 1:</strong> Disk Space - "
+    if [ "$disk_check_exit" -eq 0 ] && [ -n "$disk_usage" ]; then
+        if [ "$disk_usage" -ge 90 ]; then
+            output+="<span style='color: #d32f2f; font-weight: bold;'>CRITICAL ($disk_usage% used)</span><br>"
+            output+="<span style='font-size: 0.9em;'>🔴 Mail spool is nearly full! Clean up immediately.</span>"
+        elif [ "$disk_usage" -ge 75 ]; then
+            output+="<span style='color: #f57c00; font-weight: bold;'>WARNING ($disk_usage% used)</span><br>"
+            output+="<span style='font-size: 0.9em;'>🟡 Mail spool is filling up. Plan cleanup soon.</span>"
+        else
+            output+="<span style='color: #388e3c;'>OK ($disk_usage% used)</span>"
+        fi
+    else
+        output+="<span style='color: #757575;'>Unable to check</span>"
+    fi
+    output+="</div>"
+
+    # Check 2: Mail queue size
+    set +e
+    local queue_count
+    queue_count=$(mailq 2>/dev/null | tail -1 | grep -oE '^[0-9]+' || echo "0")
+    queue_count=${queue_count:-0}
+    set -e
+
+    output+="<div style='margin: 8px 0;'>"
+    output+="✅ <strong>Check 2:</strong> Mail Queue - "
+    if [ "$queue_count" -gt 100 ]; then
+        output+="<span style='color: #d32f2f; font-weight: bold;'>CRITICAL ($queue_count messages)</span><br>"
+        output+="<span style='font-size: 0.9em;'>🔴 Large queue backlog. Mail delivery is impaired.</span>"
+    elif [ "$queue_count" -gt 20 ]; then
+        output+="<span style='color: #f57c00; font-weight: bold;'>WARNING ($queue_count messages)</span><br>"
+        output+="<span style='font-size: 0.9em;'>🟡 Queue is backing up. Investigate delivery issues.</span>"
+    else
+        output+="<span style='color: #388e3c;'>OK ($queue_count messages)</span>"
+    fi
+    output+="</div>"
+
+    # Check 3: Postfix service status
+    set +e
+    local postfix_active
+    postfix_active=$(systemctl is-active postfix 2>/dev/null || echo "unknown")
+    set -e
+
+    output+="<div style='margin: 8px 0;'>"
+    output+="✅ <strong>Check 3:</strong> Postfix Service - "
+    if [ "$postfix_active" = "active" ]; then
+        output+="<span style='color: #388e3c;'>RUNNING</span>"
+    elif [ "$postfix_active" = "inactive" ] || [ "$postfix_active" = "failed" ]; then
+        output+="<span style='color: #d32f2f; font-weight: bold;'>NOT RUNNING</span><br>"
+        output+="<span style='font-size: 0.9em;'>🔴 Postfix service is down! Start it immediately.</span>"
+    else
+        output+="<span style='color: #757575;'>Unable to check</span>"
+    fi
+    output+="</div>"
+
+    # Check 4: TLS configuration
+    set +e
+    local tls_enabled
+    tls_enabled=$(postconf smtpd_tls_security_level 2>/dev/null | grep -q "may\|encrypt" && echo "yes" || echo "no")
+    set -e
+
+    output+="<div style='margin: 8px 0;'>"
+    output+="✅ <strong>Check 4:</strong> TLS Configuration - "
+    if grep -qiE "SSL|TLS" <<< "$sample_msg" 2>/dev/null; then
+        # This is a TLS-related error
+        if [ "$tls_enabled" = "yes" ]; then
+            output+="<span style='color: #2196F3;'>Enabled</span><br>"
+            output+="<span style='font-size: 0.9em;'>ℹ️ TLS is enabled. Error may be cert-related. Check certificate validity.</span>"
+        else
+            output+="<span style='color: #f57c00; font-weight: bold;'>Disabled or misconfigured</span><br>"
+            output+="<span style='font-size: 0.9em;'>🟡 TLS configuration issue detected.</span>"
+        fi
+    else
+        output+="<span style='color: #388e3c;'>Not applicable to this error</span>"
+    fi
+    output+="</div>"
+
+    # Final recommendation based on diagnostics
+    output+="<div style='margin-top: 15px; padding: 10px; background: #fff3e0; border-left: 4px solid #ff9800;'>"
+    output+="<strong>📋 AUTOMATED RECOMMENDATION:</strong><br>"
+
+    # Build recommendation based on findings
+    if [ "$disk_usage" -ge 90 ] || [ "$postfix_active" = "inactive" ] || [ "$postfix_active" = "failed" ]; then
+        output+="<strong style='color: #d32f2f;'>CRITICAL:</strong> Immediate action required. "
+        [ "$disk_usage" -ge 90 ] && output+="Free disk space. "
+        [ "$postfix_active" != "active" ] && output+="Start Postfix service. "
+    elif [ "$disk_usage" -ge 75 ] || [ "$queue_count" -gt 100 ]; then
+        output+="<strong style='color: #f57c00;'>WARNING:</strong> Action needed soon. "
+        [ "$disk_usage" -ge 75 ] && output+="Monitor and plan disk cleanup. "
+        [ "$queue_count" -gt 100 ] && output+="Investigate queue backlog. "
+    else
+        output+="<strong style='color: #388e3c;'>INFO:</strong> System metrics look healthy. Error may be transient or configuration-related. Monitor logs for patterns."
+    fi
+
+    output+="</div>"
+    output+="</div>"
+
+    echo "$output"
+}
+
 # Check if hostname belongs to a known mail provider
 is_known_mail_provider() {
     local hostname="$1"
@@ -1100,44 +1215,24 @@ EOF
 
             # Handle internal errors differently (no IP intelligence, AI, or automation)
             if [ "$ip" = "internal" ]; then
-                # Internal server errors - simplified card
+                # Internal server errors - automated diagnostics
                 hostname=""
                 asn=""
                 country=""
                 recommendation=""
 
-                # Build improved commands with proper formatting
-                commands="# Review server configuration:
+                # Run automated diagnostics instead of static guidance
+                decision_guide=$(diagnose_internal_error "$sample_msg")
+
+                # Provide manual investigation commands only if needed
+                commands="# Manual investigation commands (if needed):
 journalctl -u postfix -n 100
 
-# Check TLS configuration:
-postconf | grep tls
+# Check recent TLS issues:
+grep -i 'tls\|ssl' /var/log/mail.log | tail -20
 
-# Review mail queue:
-mailq
-
-# Check disk space:
-df -h /var/spool/postfix"
-
-                # Build severity-aware guidance
-                action_needed="⚠️ <strong>ACTION RECOMMENDED</strong>"
-                if [ "$severity" = "CRITICAL" ] || [ "$count" -gt 20 ]; then
-                    action_needed="🔴 <strong>URGENT ACTION REQUIRED</strong>"
-                elif [ "$count" -le 5 ]; then
-                    action_needed="ℹ️ <strong>INFORMATIONAL - Monitor</strong>"
-                fi
-
-                decision_guide="<strong>📌 INTERNAL ERROR GUIDANCE:</strong>
-<div style='margin: 10px 0; padding: 10px; background: #fff3e0; border-left: 4px solid #ff9800;'>
-$action_needed<br><br>
-This error originates from the mail server itself, not from a remote connection.
-<ul style='margin: 10px 0; padding-left: 20px;'>
-<li><strong>Error Count:</strong> $count occurrence(s) - $([ "$count" -gt 20 ] && echo "High frequency suggests systemic issue" || [ "$count" -gt 10 ] && echo "Moderate frequency" || echo "Low frequency")</li>
-<li><strong>Severity:</strong> $severity</li>
-<li><strong>Likely Causes:</strong> Disk space issues, SSL/TLS certificate problems, configuration errors, or service availability</li>
-<li><strong>Next Steps:</strong> Review server logs, check disk space, verify TLS certificates, and ensure Postfix service is running properly</li>
-</ul>
-</div>"
+# Review full postfix configuration:
+postconf -n"
             else
                 # Regular IP-based errors - full analysis
                 # Get IP intelligence
