@@ -510,7 +510,7 @@ if [ "$send_immediately" = false ] && (( ${#errors[@]} > 0 )); then
         # Call categorize_severity with error protection
         # Note: timeout within the function (grep calls) provides timeout protection
         set +e  # Temporarily disable exit on error for this block
-        severity=$(categorize_severity "$ip" "$sample_msg" "$count" 2>&1)
+        severity=$(categorize_severity "$ip" "$sample_msg" "$count")
         cat_exit_code=$?
         set -e  # Re-enable exit on error
 
