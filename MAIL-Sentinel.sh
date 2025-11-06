@@ -436,10 +436,10 @@ for logfile in "${logfiles[@]}"; do
 
             # Group errors by IP: count occurrences and keep one sample message per IP
             ip_errors_count["$ip"]=$(( ${ip_errors_count["$ip"]:-0} + 1 ))
-            if [ "${ip_errors_count["$ip"]}" -eq 1 ]; then
+            if [ "${ip_errors_count["$ip"]:-0}" -eq 1 ]; then
                 ip_errors_sample["$ip"]="$sample_msg"
                 # Categorize severity for this IP (will be updated later based on final count)
-                severity=$(categorize_severity "$ip" "$sample_msg" "${ip_errors_count["$ip"]}")
+                severity=$(categorize_severity "$ip" "$sample_msg" "${ip_errors_count["$ip"]:-1}")
                 ip_errors_severity["$ip"]="$severity"
             fi
 
@@ -641,7 +641,7 @@ EOF
     # Sort IPs by severity (Critical, Warning, Info) then by count
     declare -a critical_ips warning_ips info_ips
     for ip in "${!ip_errors_count[@]}"; do
-        severity=${ip_errors_severity[$ip]}
+        severity=${ip_errors_severity[$ip]:-INFO}
         case "$severity" in
             CRITICAL) critical_ips+=("$ip") ;;
             WARNING) warning_ips+=("$ip") ;;
@@ -653,9 +653,9 @@ EOF
     detailed_cards_added=0
     for ip in "${critical_ips[@]}" "${warning_ips[@]}" "${info_ips[@]}"; do
         [ -z "$ip" ] && continue
-        count=${ip_errors_count[$ip]}
-        sample_msg=${ip_errors_sample[$ip]}
-        severity=${ip_errors_severity[$ip]}
+        count=${ip_errors_count[$ip]:-0}
+        sample_msg=${ip_errors_sample[$ip]:-"No sample message"}
+        severity=${ip_errors_severity[$ip]:-INFO}
 
         # Only include errors at or above the threshold
         if [ "$count" -ge "$ERROR_THRESHOLD" ]; then
@@ -671,7 +671,7 @@ EOF
             esac
 
             # Get IP intelligence
-            if [ -n "${ip_intelligence_cache[$ip]}" ]; then
+            if [ -n "${ip_intelligence_cache[$ip]+isset}" ]; then
                 ip_intel="${ip_intelligence_cache[$ip]}"
             else
                 ip_intel=$(get_ip_intelligence "$ip")
