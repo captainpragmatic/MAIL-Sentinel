@@ -508,11 +508,15 @@ check_fail2ban_history() {
             # Count bans
             local file_bans
             file_bans=$(grep -c "Ban $ip" <<< "$content" 2>/dev/null || echo "0")
+            # Sanitize to ensure it's a valid integer
+            file_bans=$(echo "$file_bans" | tr -d '\n\r' | grep -oE '^[0-9]+$' || echo "0")
             ban_count=$((ban_count + file_bans))
 
             # Count unbans
             local file_unbans
             file_unbans=$(grep -c "Unban $ip" <<< "$content" 2>/dev/null || echo "0")
+            # Sanitize to ensure it's a valid integer
+            file_unbans=$(echo "$file_unbans" | tr -d '\n\r' | grep -oE '^[0-9]+$' || echo "0")
             unban_count=$((unban_count + file_unbans))
 
             # Get last ban timestamp and jail
@@ -588,11 +592,16 @@ get_command_suggestions() {
             local ban_count unban_count last_ban last_unban history_jails
             IFS='|' read -r ban_count unban_count last_ban last_unban history_jails <<< "$(check_fail2ban_history "$ip")"
 
-            # Display history if available
+            # Sanitize counts to ensure they're valid integers
+            ban_count=$(echo "$ban_count" | tr -d '\n\r' | grep -oE '^[0-9]+$' || echo "0")
+            unban_count=$(echo "$unban_count" | tr -d '\n\r' | grep -oE '^[0-9]+$' || echo "0")
+
+            # Always display history section to show we checked
+            commands+="# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            commands+="# 📊 FAIL2BAN HISTORY FOR THIS IP:\n"
+            commands+="# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+
             if [ "$ban_count" -gt 0 ] || [ "$unban_count" -gt 0 ]; then
-                commands+="# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                commands+="# 📊 FAIL2BAN HISTORY FOR THIS IP:\n"
-                commands+="# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
                 commands+="# Total bans: $ban_count\n"
                 commands+="# Total unbans: $unban_count\n"
                 [ -n "$last_ban" ] && commands+="# Last ban: $last_ban (jails: $history_jails)\n"
@@ -603,8 +612,11 @@ get_command_suggestions() {
                 elif [ "$ban_count" -gt 0 ]; then
                     commands+="# ℹ️  Note: This IP has been banned before.\n"
                 fi
-                commands+="# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            else
+                commands+="# ✓ No previous bans found in fail2ban logs\n"
+                commands+="# This IP has a clean history (first-time offender or new IP)\n"
             fi
+            commands+="# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
 
             # Display current status
             if [ -n "$banned_jails" ]; then
@@ -635,6 +647,9 @@ get_command_suggestions() {
         local iptables_blocked
         iptables_blocked=$(iptables -L INPUT -n 2>/dev/null | grep -c "$ip" || echo "0")
         set -e
+
+        # Sanitize to ensure it's a valid integer
+        iptables_blocked=$(echo "$iptables_blocked" | tr -d '\n\r' | grep -oE '^[0-9]+$' || echo "0")
 
         if [ "$iptables_blocked" -gt 0 ]; then
             commands+="# ✓ IP already blocked in iptables ($iptables_blocked rule(s))\n"
@@ -1508,14 +1523,16 @@ postconf -n"
 
             # Only show IP Intelligence section if hostname is not empty
             if [ -n "$hostname" ]; then
-                # Build blocklist warning
-                blocklist_warning=""
+                # Build blocklist status display
+                blocklist_display=""
                 if [ "$blocklist_status" = "listed" ]; then
                     if [ -n "$blocklist_name" ]; then
-                        blocklist_warning="<br>⚠️ <span style='color: #d32f2f; font-weight: bold;'>BLOCKLIST: Listed on $blocklist_name</span>"
+                        blocklist_display="<span style='color: #d32f2f; font-weight: bold;'>⚠️ LISTED on $blocklist_name</span>"
                     else
-                        blocklist_warning="<br>⚠️ <span style='color: #d32f2f; font-weight: bold;'>BLOCKLIST: Found on public spam/abuse lists</span>"
+                        blocklist_display="<span style='color: #d32f2f; font-weight: bold;'>⚠️ LISTED on public spam/abuse lists</span>"
                     fi
+                else
+                    blocklist_display="<span style='color: #388e3c;'>✓ Clean (not listed)</span>"
                 fi
 
                 # Build network type badge
@@ -1535,7 +1552,8 @@ postconf -n"
     🏢 Organization: $org<br>
     🌐 ASN: $asn<br>
     🌍 Country: $country<br>
-    🔌 Network Type: $network_badge$blocklist_warning
+    🔌 Network Type: $network_badge<br>
+    🛡️ Blocklist: $blocklist_display
   </div>
 "
             fi
