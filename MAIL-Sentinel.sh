@@ -38,6 +38,10 @@
 #
 # ###############################################################
 set -euo pipefail
+
+# Trap to detect unexpected termination (only on errors)
+trap 'echo "✗ FATAL: Script terminated unexpectedly at line $LINENO with exit code $?" >&2' ERR
+
 # Source secure configuration if it exists.
 # shellcheck disable=SC1091
 [ -f "$(dirname "$0")/config.sh" ] && source "$(dirname "$0")/config.sh"
@@ -191,20 +195,25 @@ categorize_severity() {
     local error_line="$1"
     local count="$2"
 
+    debug_log "categorize_severity called with count=$count"
+
     # Check if it matches known safe patterns (INFO level)
     if echo "$error_line" | grep -qE "$KNOWN_SAFE_PATTERNS"; then
+        debug_log "Matched KNOWN_SAFE_PATTERNS"
         echo "INFO"
         return
     fi
 
     # Critical: authentication failures, service disruptions, delivery failures
     if echo "$error_line" | grep -qiE "authentication failed|service unavailable|queue file write error|disk full|fatal"; then
+        debug_log "Matched CRITICAL pattern"
         echo "CRITICAL"
         return
     fi
 
     # Warning: SSL errors, connection issues, bounces, deferred
     if echo "$error_line" | grep -qiE "SSL_accept|TLS|connection reset|bounced|deferred|timeout"; then
+        debug_log "Matched WARNING/INFO pattern"
         if [ "$count" -gt 10 ]; then
             echo "WARNING"
         else
@@ -214,6 +223,7 @@ categorize_severity() {
     fi
 
     # Default to INFO for low-count errors
+    debug_log "Using default severity logic"
     if [ "$count" -le "$AUTO_IGNORE_THRESHOLD" ]; then
         echo "INFO"
     else
@@ -381,13 +391,27 @@ for logfile in "${logfiles[@]}"; do
 done
 
 if [ "$send_immediately" = false ] && (( ${#errors[@]} > 0 )); then
-    echo "✓ CHECKPOINT: Found ${#errors[@]} total errors from ${#ip_errors_count[@]} unique IPs" >&2
-    echo "✓ CHECKPOINT: Starting severity categorization..." >&2
+    {
+        echo "✓ CHECKPOINT: Found ${#errors[@]} total errors from ${#ip_errors_count[@]} unique IPs"
+        echo "✓ CHECKPOINT: Starting severity categorization at $(date '+%H:%M:%S')..."
+    } >&2
     # Recategorize severity based on final counts and count by severity
+    echo "✓ CHECKPOINT: About to start loop over ${#ip_errors_count[@]} IPs..." >&2
+    ip_counter=0
+    echo "✓ CHECKPOINT: ip_counter initialized, entering loop..." >&2
     for ip in "${!ip_errors_count[@]}"; do
-        count=${ip_errors_count[$ip]}
-        sample_msg=${ip_errors_sample[$ip]}
-        severity=$(categorize_severity "$sample_msg" "$count")
+        ((ip_counter++))
+        echo "  → [$(date '+%H:%M:%S')] Processing IP $ip_counter/${#ip_errors_count[@]}: $ip" >&2
+        count=${ip_errors_count[$ip]:-0}
+        sample_msg=${ip_errors_sample[$ip]:-"No sample message"}
+
+        echo "    Count: $count, calling categorize_severity..." >&2
+        severity=$(categorize_severity "$sample_msg" "$count" 2>&1) || {
+            echo "    ✗ ERROR: categorize_severity failed for IP $ip" >&2
+            severity="INFO"
+        }
+        echo "    Severity: $severity" >&2
+
         ip_errors_severity["$ip"]="$severity"
 
         case "$severity" in
@@ -666,3 +690,6 @@ else
         echo "ℹ INFO: No errors found in logs within the last $TIME_WINDOW_HOURS hours - no email sent" >&2
     fi
 fi
+
+echo "✓ CHECKPOINT: Script completed successfully at $(date '+%H:%M:%S')" >&2
+exit 0
