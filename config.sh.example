@@ -5,6 +5,11 @@
 # Required: Email and API Configuration
 export POSTFIX_REPORT_EMAIL="user@example.com"  # Recipient email
 export OPENAI_API_KEY="your_secure_openai_api_key"  # API key
+export OPENAI_MODEL="gpt-5-mini"  # OpenAI model to use (gpt-5-mini, gpt-5, gpt-4o, gpt-4o-mini)
+
+# Optional: Email From Header
+export MAIL_FROM_NAME="M.A.I.L. Sentinel"       # Display name in From header (default: M.A.I.L. Sentinel)
+export MAIL_FROM_EMAIL="sentinel@$(hostname)"   # From email address (default: sentinel@hostname)
 
 # Optional: Thresholds and Limits
 export ERROR_THRESHOLD=5           # Minimum error count before sending to OpenAI (default: 5)
@@ -19,3 +24,16 @@ export MAIL_SENTINEL_DEBUG=false  # Set to true for verbose debug output
 # Optional: Known Safe Patterns (pipe-separated, no spaces)
 # These patterns will be categorized as INFO level instead of WARNING
 export KNOWN_SAFE_PATTERNS="gaia.bounces.google.com|amazonses.com|mailgun.net|sendgrid.net"
+
+# Optional: Smart Automation Features
+export ENABLE_SSL_AUTOMATION=true         # Enable automated SSL/TLS analysis (default: true)
+export ENABLE_CERT_CHECK=true             # Check SSL certificate validity (default: true)
+export ENABLE_LOG_PATTERN_ANALYSIS=true   # Scan logs for successful connections (default: true)
+export ENABLE_AUTO_BLOCKING=false         # DANGEROUS: Auto-block IPs (default: false)
+
+# Optional: Automation Thresholds
+export SCANNER_CONFIDENCE_THRESHOLD=0.7   # Scanner probability threshold 0-1 (default: 0.7)
+export CERT_EXPIRY_WARNING_DAYS=30        # Warn if cert expires within N days (default: 30)
+
+# Optional: Known Mail Provider Patterns (pipe-separated regex)
+export KNOWN_MAIL_PROVIDERS="google\\.com|outlook\\.com|yahoodns\\.net|icloud\\.com|amazonses\\.com|sendgrid\\.net|mailgun"

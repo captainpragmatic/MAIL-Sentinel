@@ -156,7 +156,8 @@ get_fix_recommendation() {
 
     # Build a safe JSON payload using jq
     local payload
-    payload=$(jq -n --arg model "gpt-4o-mini" --arg prompt "$prompt" '{
+    local model="${OPENAI_MODEL:-gpt-5-mini}"
+    payload=$(jq -n --arg model "$model" --arg prompt "$prompt" '{
                         model: $model,
                         messages: [{role: "user", content: $prompt}],
                         max_tokens: 200,
@@ -319,8 +320,11 @@ get_command_suggestions() {
     if grep -qiE "connection reset|refused|timeout" <<< "$error_line" 2>/dev/null; then
         commands+="# Check if IP is on blocklists:\n"
         commands+="# Visit: https://mxtoolbox.com/SuperTool.aspx?action=blacklist%3a$ip\n\n"
-        commands+="# Block this IP with fail2ban (if malicious):\n"
-        commands+="fail2ban-client set postfix banip $ip\n\n"
+        commands+="# First, list available fail2ban jails:\n"
+        commands+="fail2ban-client status\n\n"
+        commands+="# Block this IP with fail2ban (replace JAILNAME with actual jail):\n"
+        commands+="# Common jail names: postfix-sasl, postfix-auth, dovecot, sshd\n"
+        commands+="fail2ban-client set JAILNAME banip $ip\n\n"
         commands+="# Or block with UFW:\n"
         commands+="ufw deny from $ip\n\n"
     fi
@@ -384,6 +388,282 @@ EOF
 </ol>
 EOF
     fi
+}
+
+# ============================================================================
+# SMART AUTOMATION FUNCTIONS
+# ============================================================================
+
+# Check if hostname belongs to a known mail provider
+is_known_mail_provider() {
+    local hostname="$1"
+
+    if [ "$hostname" = "unknown" ] || [ -z "$hostname" ]; then
+        echo "false|unknown"
+        return
+    fi
+
+    # Use KNOWN_MAIL_PROVIDERS from config, fallback to defaults
+    local providers="${KNOWN_MAIL_PROVIDERS:-google\\.com|outlook\\.com|yahoodns\\.net|icloud\\.com|amazonses\\.com|sendgrid\\.net|mailgun}"
+
+    if grep -qiE "$providers" <<< "$hostname" 2>/dev/null; then
+        local provider
+        provider=$(grep -oiE "$providers" <<< "$hostname" 2>/dev/null | head -1)
+        echo "true|$provider"
+    else
+        echo "false|unknown"
+    fi
+}
+
+# Check SSL certificate validity on local mail server
+check_ssl_certificate() {
+    # Returns: "valid|date|days" or "expired|date" or "expiring|date|days" or "error|message"
+
+    local cert_info
+    local hostname_fqdn
+    hostname_fqdn=$(hostname 2>/dev/null)
+
+    # Use timeout and suppress errors
+    set +e
+    cert_info=$(echo | timeout 5 openssl s_client -connect "${hostname_fqdn}:25" -starttls smtp 2>/dev/null | \
+                openssl x509 -noout -enddate 2>/dev/null)
+    local exit_code=$?
+    set -e
+
+    if [ "$exit_code" -ne 0 ] || [ -z "$cert_info" ]; then
+        echo "error|Unable to check certificate"
+        return
+    fi
+
+    local expiry_date
+    expiry_date=$(echo "$cert_info" | grep -oP 'notAfter=\K.*' 2>/dev/null)
+
+    if [ -z "$expiry_date" ]; then
+        echo "error|Unable to parse certificate date"
+        return
+    fi
+
+    local expiry_epoch current_epoch
+    set +e
+    expiry_epoch=$(date -d "$expiry_date" +%s 2>/dev/null)
+    local date_exit=$?
+    set -e
+    current_epoch=$(date +%s)
+
+    if [ "$date_exit" -ne 0 ]; then
+        echo "error|Unable to parse date"
+        return
+    fi
+
+    if [ "$expiry_epoch" -lt "$current_epoch" ]; then
+        echo "expired|$expiry_date"
+    else
+        local days_left=$(( (expiry_epoch - current_epoch) / 86400 ))
+        local warn_days="${CERT_EXPIRY_WARNING_DAYS:-30}"
+        if [ "$days_left" -lt "$warn_days" ]; then
+            echo "expiring|$expiry_date|$days_left"
+        else
+            echo "valid|$expiry_date|$days_left"
+        fi
+    fi
+}
+
+# Check for successful TLS connections from other IPs
+check_successful_tls_connections() {
+    local exclude_ip="$1"
+
+    local success_count=0
+    local recent_logs="/var/log/mail.log"
+
+    # Look for successful TLS patterns in recent logs
+    if [ -f "$recent_logs" ]; then
+        set +e
+        success_count=$(grep -E "TLS connection established|Anonymous TLS connection" "$recent_logs" 2>/dev/null | \
+                       grep -v "$exclude_ip" | \
+                       tail -100 | \
+                       wc -l)
+        set -e
+    fi
+
+    echo "$success_count"
+}
+
+# Check if IP has successful delivery history
+check_ip_history() {
+    local ip="$1"
+
+    local success_count=0
+
+    # Check recent and archived logs
+    for logfile in /var/log/mail.log /var/log/mail.log.1; do
+        [ -f "$logfile" ] || continue
+        set +e
+        local count
+        count=$(grep "$ip" "$logfile" 2>/dev/null | grep -cE "status=sent|delivered" 2>/dev/null || echo 0)
+        success_count=$(( success_count + count ))
+        set -e
+        [ "$success_count" -gt 0 ] && break
+    done
+
+    if [ "$success_count" -gt 0 ]; then
+        echo "true|$success_count"
+    else
+        echo "false|0"
+    fi
+}
+
+# Calculate scanner confidence score (0.0-1.0)
+calculate_scanner_confidence() {
+    local ip="$1"
+    local hostname="$2"
+    local error_count="$3"
+    local has_successful_history="$4"
+
+    local confidence=0
+
+    # High error count (>10 in time window): +30 points
+    [ "$error_count" -gt 10 ] && confidence=$(( confidence + 30 ))
+
+    # No rDNS or generic hostname: +25 points
+    if [ "$hostname" = "unknown" ] || \
+       grep -qiE "static|dynamic|pool|broadband|cable|dsl|dial" <<< "$hostname" 2>/dev/null; then
+        confidence=$(( confidence + 25 ))
+    fi
+
+    # No successful history: +25 points
+    [ "$has_successful_history" = "false" ] && confidence=$(( confidence + 25 ))
+
+    # Very high error count (>50): +20 points
+    [ "$error_count" -gt 50 ] && confidence=$(( confidence + 20 ))
+
+    # Return as percentage (0-100)
+    echo "$confidence"
+}
+
+# Main automated SSL/TLS analysis function
+get_automated_ssl_analysis() {
+    local ip="$1"
+    local hostname="$2"
+    local error_count="$3"
+    local sample_msg="$4"
+
+    local output=""
+    output+="<strong>🤖 AUTOMATED SSL/TLS ANALYSIS:</strong><br>"
+    output+="<div style='margin: 10px 0; padding: 10px; background: #f0f8ff; border-left: 4px solid #2196F3;'>"
+
+    # Check 1: Known mail provider detection
+    local is_known provider
+    IFS='|' read -r is_known provider <<< "$(is_known_mail_provider "$hostname")"
+
+    output+="<div style='margin: 8px 0;'>"
+    if [ "$is_known" = "true" ]; then
+        output+="✅ <strong>Check 1:</strong> IP from known mail provider: <code>$provider</code><br>"
+        output+="<span style='color: #d32f2f; font-weight: bold;'>⚠️ CRITICAL: Your SSL certificate may be expired or misconfigured!</span><br>"
+        output+="<span style='font-size: 0.9em;'>Legitimate mail providers should connect successfully. Check cert validity immediately.</span>"
+    else
+        output+="✅ <strong>Check 1:</strong> Not from known provider → Proceeding to next checks"
+    fi
+    output+="</div>"
+
+    # Check 2: SSL certificate validity
+    if [ "${ENABLE_CERT_CHECK:-true}" = "true" ]; then
+        local cert_status cert_date cert_days
+        IFS='|' read -r cert_status cert_date cert_days <<< "$(check_ssl_certificate)"
+
+        output+="<div style='margin: 8px 0;'>"
+        output+="✅ <strong>Check 2:</strong> SSL Certificate Status: "
+
+        case "$cert_status" in
+            expired)
+                output+="<span style='color: #d32f2f; font-weight: bold;'>EXPIRED</span> (expired on: $cert_date)<br>"
+                output+="<span style='font-size: 0.9em;'>🔴 ACTION REQUIRED: Renew certificate immediately!</span>"
+                ;;
+            expiring)
+                output+="<span style='color: #f57c00; font-weight: bold;'>EXPIRING SOON</span> (expires in $cert_days days)<br>"
+                output+="<span style='font-size: 0.9em;'>🟡 WARNING: Renew certificate within $cert_days days</span>"
+                ;;
+            valid)
+                output+="<span style='color: #388e3c; font-weight: bold;'>VALID</span> (expires: $cert_date, $cert_days days remaining)"
+                ;;
+            error)
+                output+="<span style='color: #757575;'>Unable to verify ($cert_date)</span>"
+                ;;
+        esac
+        output+="</div>"
+    fi
+
+    # Check 3: Successful TLS from other IPs
+    if [ "${ENABLE_LOG_PATTERN_ANALYSIS:-true}" = "true" ]; then
+        local success_count
+        success_count=$(check_successful_tls_connections "$ip")
+
+        output+="<div style='margin: 8px 0;'>"
+        output+="✅ <strong>Check 3:</strong> Recent successful TLS connections: $success_count<br>"
+
+        if [ "$success_count" -eq 0 ]; then
+            output+="<span style='color: #d32f2f; font-weight: bold;'>🔴 CRITICAL: No successful TLS connections found!</span><br>"
+            output+="<span style='font-size: 0.9em;'>This suggests a global SSL/TLS configuration problem.</span>"
+        else
+            output+="<span style='color: #388e3c;'>✓ SSL/TLS working for other IPs → This IP likely has client-side issues or is a scanner</span>"
+        fi
+        output+="</div>"
+    fi
+
+    # Check 4: IP history
+    local has_history success_count
+    IFS='|' read -r has_history success_count <<< "$(check_ip_history "$ip")"
+
+    output+="<div style='margin: 8px 0;'>"
+    output+="✅ <strong>Check 4:</strong> Historical delivery success: "
+    if [ "$has_history" = "true" ]; then
+        output+="<span style='color: #388e3c;'>YES ($success_count deliveries)</span><br>"
+        output+="<span style='font-size: 0.9em;'>This IP has successfully delivered mail before. Recent SSL errors may indicate a new issue.</span>"
+    else
+        output+="<span style='color: #f57c00;'>NO</span><br>"
+        output+="<span style='font-size: 0.9em;'>First contact or never successful → May be scanner or misconfigured client</span>"
+    fi
+    output+="</div>"
+
+    # Check 5: Scanner confidence score
+    local scanner_confidence
+    scanner_confidence=$(calculate_scanner_confidence "$ip" "$hostname" "$error_count" "$has_history")
+
+    output+="<div style='margin: 8px 0;'>"
+    output+="✅ <strong>Check 5:</strong> Scanner probability: "
+
+    if [ "$scanner_confidence" -ge 70 ]; then
+        output+="<span style='color: #d32f2f; font-weight: bold;'>HIGH ($scanner_confidence%)</span><br>"
+        output+="<span style='font-size: 0.9em;'>🔴 Likely a scanner. Safe to block.</span>"
+    elif [ "$scanner_confidence" -ge 40 ]; then
+        output+="<span style='color: #f57c00; font-weight: bold;'>MEDIUM ($scanner_confidence%)</span><br>"
+        output+="<span style='font-size: 0.9em;'>🟡 Possible scanner. Monitor before blocking.</span>"
+    else
+        output+="<span style='color: #388e3c;'>LOW ($scanner_confidence%)</span><br>"
+        output+="<span style='font-size: 0.9em;'>✓ May be legitimate. Investigate further.</span>"
+    fi
+    output+="</div>"
+
+    # Final recommendation
+    output+="<div style='margin-top: 15px; padding: 10px; background: #fff3e0; border-left: 4px solid #ff9800;'>"
+    output+="<strong>📋 AUTOMATED RECOMMENDATION:</strong><br>"
+
+    # Decision logic
+    if [ "$is_known" = "true" ] && [ "$cert_status" = "expired" ]; then
+        output+="<strong style='color: #d32f2f;'>URGENT ACTION REQUIRED:</strong> Certificate expired. Renew immediately to restore mail flow from major providers."
+    elif [ "$success_count" -eq 0 ]; then
+        output+="<strong style='color: #d32f2f;'>URGENT:</strong> Global SSL/TLS failure detected. Fix server configuration immediately."
+    elif [ "$scanner_confidence" -ge 70 ]; then
+        output+="<strong style='color: #f57c00;'>RECOMMENDED:</strong> Block this IP (high scanner probability)."
+    elif [ "$has_history" = "true" ]; then
+        output+="<strong style='color: #2196F3;'>INVESTIGATE:</strong> IP has successful history but now failing. Check for client-side changes."
+    else
+        output+="<strong style='color: #388e3c;'>MONITOR:</strong> Low risk. No immediate action required."
+    fi
+
+    output+="</div>"
+    output+="</div>"
+
+    echo "$output"
 }
 
 # Process each logfile in the defined logfiles list
@@ -586,7 +866,7 @@ if [ "$send_immediately" = false ] && (( ${#errors[@]} > 0 )); then
 </head>
 <body>
 <div class="container">
-  <h1>🛡️ M.A.I.L-Sentinel Report</h1>
+  <h1>M.A.I.L-Sentinel Report</h1>
   <div class="header-date">Host: <strong>$(hostname)</strong> | Report Generated: <strong>$(date '+%Y-%m-%d %H:%M:%S %Z')</strong></div>
 
   <div class="exec-summary">
@@ -691,7 +971,14 @@ EOF
 
             # Get command suggestions and decision guide
             commands=$(get_command_suggestions "$sample_msg" "$ip")
-            decision_guide=$(get_decision_guide "$sample_msg")
+
+            # Use automated analysis for SSL/TLS errors if enabled, otherwise use static guide
+            if [ "${ENABLE_SSL_AUTOMATION:-true}" = "true" ] && grep -qiE "SSL_accept|TLS" <<< "$sample_msg" 2>/dev/null; then
+                debug_log "Using automated SSL/TLS analysis for $ip"
+                decision_guide=$(get_automated_ssl_analysis "$ip" "$hostname" "$count" "$sample_msg")
+            else
+                decision_guide=$(get_decision_guide "$sample_msg")
+            fi
 
             # Build the error card
             email_body+=$(cat <<EOF
@@ -786,8 +1073,14 @@ EOF
     # Log that email is about to be sent
     debug_log "Sending aggregated email with $critical_count critical, $warning_count warning, $info_count info items"
     echo "✓ CHECKPOINT: Email body complete - sending to $email..." >&2
+
+    # Set default values for From header if not configured
+    from_name="${MAIL_FROM_NAME:-M.A.I.L. Sentinel}"
+    from_email="${MAIL_FROM_EMAIL:-sentinel@$(hostname)}"
+
     {
-        echo "Subject: 🛡️ M.A.I.L-Sentinel Report: $critical_count Critical, $warning_count Warning, $info_count Info - $(hostname)"
+        echo "From: $from_name <$from_email>"
+        echo "Subject: M.A.I.L-Sentinel Report: $critical_count Critical, $warning_count Warning, $info_count Info - $(hostname)"
         echo "MIME-Version: 1.0"
         echo "Content-Type: text/html; charset=UTF-8"
         echo
