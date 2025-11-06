@@ -18,7 +18,7 @@ M.A.I.L. Sentinel is not just a log monitoring script; it's an intelligent guard
 ## Requirements ✅
 
 - Bash shell
-- Command line utilities: jq, curl, tac, mail, sendmail, awk, sed.
+- Command line utilities: jq, curl, tac, mail, sendmail, awk, sed, host, whois, timeout.
 - Environment variables:
   - `POSTFIX_REPORT_EMAIL`: Recipient email address ✉️.
   - `OPENAI_API_KEY`: Valid OpenAI API key 🔑.

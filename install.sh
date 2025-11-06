@@ -46,7 +46,7 @@ check_command() {
 
 # Check for dependencies
 echo -e "\n${BOLD}Checking dependencies...${NC}"
-dependencies=("jq" "curl" "tac" "mail" "sendmail" "awk" "sed")
+dependencies=("jq" "curl" "tac" "mail" "sendmail" "awk" "sed" "host" "whois" "timeout")
 missing_deps=false
 
 for dep in "${dependencies[@]}"; do

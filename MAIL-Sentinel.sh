@@ -43,7 +43,7 @@ set -euo pipefail
 [ -f "$(dirname "$0")/config.sh" ] && source "$(dirname "$0")/config.sh"
 
 # Validate required external commands are installed.
-required_cmds=("jq" "curl" "tac" "mail" "sendmail" "awk" "sed")
+required_cmds=("jq" "curl" "tac" "mail" "sendmail" "awk" "sed" "host" "whois" "timeout")
 for cmd in "${required_cmds[@]}"; do
     if ! command -v "$cmd" > /dev/null; then
         echo "Error: Required command '$cmd' is not installed." >&2
