@@ -313,6 +313,46 @@ categorize_severity() {
     return 0
 }
 
+# Detect available fail2ban jails for mail services
+get_fail2ban_jails() {
+    local jails=""
+
+    # Check if fail2ban-client is available
+    if ! command -v fail2ban-client >/dev/null 2>&1; then
+        echo "none"
+        return
+    fi
+
+    # Get list of active jails
+    set +e
+    local status_output
+    status_output=$(fail2ban-client status 2>/dev/null)
+    local exit_code=$?
+    set -e
+
+    if [ "$exit_code" -ne 0 ] || [ -z "$status_output" ]; then
+        echo "none"
+        return
+    fi
+
+    # Extract jail names and filter for mail-related ones
+    local all_jails
+    all_jails=$(echo "$status_output" | grep "Jail list:" | sed 's/.*Jail list:[[:space:]]*//' | tr ',' '\n' | tr -d ' ')
+
+    # Filter for mail-related jails (postfix, dovecot, sasl, etc.)
+    for jail in $all_jails; do
+        if [[ "$jail" =~ ^(postfix|dovecot|sasl|mail) ]]; then
+            jails="$jails $jail"
+        fi
+    done
+
+    if [ -z "$jails" ]; then
+        echo "none"
+    else
+        echo "$jails" | xargs
+    fi
+}
+
 # Generate specific command suggestions based on error type
 get_command_suggestions() {
     local error_line="$1"
@@ -320,22 +360,29 @@ get_command_suggestions() {
     local commands=""
 
     if grep -qiE "SSL_accept|TLS" <<< "$error_line" 2>/dev/null; then
-        commands+="# Test SSL certificate:\n"
-        commands+="echo | openssl s_client -connect \$(hostname):25 -starttls smtp 2>/dev/null | openssl x509 -noout -dates\n\n"
-        commands+="# Check certificate expiry:\n"
-        commands+="echo | openssl s_client -connect \$(hostname):25 -starttls smtp 2>/dev/null | openssl x509 -noout -enddate\n\n"
-        commands+="# View current TLS settings:\n"
+        # Certificate check is now done by automation - only include protocol settings
+        commands+="# View current TLS protocol settings:\n"
         commands+="postconf smtpd_tls_security_level smtpd_tls_protocols\n\n"
     fi
 
     if grep -qiE "connection reset|refused|timeout" <<< "$error_line" 2>/dev/null; then
         commands+="# Check if IP is on blocklists:\n"
         commands+="# Visit: https://mxtoolbox.com/SuperTool.aspx?action=blacklist%3a$ip\n\n"
-        commands+="# First, list available fail2ban jails:\n"
-        commands+="fail2ban-client status\n\n"
-        commands+="# Block this IP with fail2ban (replace JAILNAME with actual jail):\n"
-        commands+="# Common jail names: postfix-sasl, postfix-auth, dovecot, sshd\n"
-        commands+="fail2ban-client set JAILNAME banip $ip\n\n"
+
+        # Auto-detect fail2ban jails and provide specific commands
+        local jails
+        jails=$(get_fail2ban_jails)
+
+        if [ "$jails" != "none" ]; then
+            commands+="# Block this IP with fail2ban:\n"
+            for jail in $jails; do
+                commands+="fail2ban-client set $jail banip $ip\n"
+            done
+            commands+="\n"
+        else
+            commands+="# fail2ban not available or no mail jails configured\n\n"
+        fi
+
         commands+="# Or block with UFW:\n"
         commands+="ufw deny from $ip\n\n"
     fi
