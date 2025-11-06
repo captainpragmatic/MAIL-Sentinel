@@ -150,7 +150,7 @@ get_fix_recommendation() {
         return
     fi
     
-    ((__get_fix_recommendation_api_call_count++))
+    (( ++__get_fix_recommendation_api_call_count ))
 
     local prompt="Summarize the following Postfix error in a concise bullet-point list with three recommendations on how to fix, prevent, or ignore it (max 200 words): \"$error_summary\"."
 
@@ -171,7 +171,7 @@ get_fix_recommendation() {
         -d "$payload" 2>/dev/null)
 
     local curl_exit_code=$?
-    if [ $curl_exit_code -ne 0 ] || [ -z "$response" ]; then
+    if [ "$curl_exit_code" -ne 0 ] || [ -z "$response" ]; then
         debug_log "API call failed with exit code $curl_exit_code"
         echo "Recommendation unavailable at this time."
         return
@@ -222,10 +222,10 @@ get_ip_intelligence() {
     local whois_exit=$?
     set -e
 
-    if [ $whois_exit -eq 0 ] && [ -n "$whois_output" ]; then
+    if [ "$whois_exit" -eq 0 ] && [ -n "$whois_output" ]; then
         asn=$(grep -iE "^(origin|originas):" <<< "$whois_output" 2>/dev/null | head -1 | awk '{print $NF}' || echo "unknown")
         country=$(grep -i "^country:" <<< "$whois_output" 2>/dev/null | head -1 | awk '{print $NF}' || echo "unknown")
-    elif [ $whois_exit -eq 124 ]; then
+    elif [ "$whois_exit" -eq 124 ]; then
         debug_log "whois timeout for IP: $ip"
     fi
 
@@ -659,7 +659,7 @@ EOF
 
         # Only include errors at or above the threshold
         if [ "$count" -ge "$ERROR_THRESHOLD" ]; then
-            ((detailed_cards_added++))
+            (( ++detailed_cards_added ))
             summary_line="$ip: $sample_msg (occurred $count times)"
 
             # Determine card CSS class based on severity
@@ -680,10 +680,10 @@ EOF
             IFS='|' read -r hostname asn country <<< "$ip_intel"
 
             # Get AI recommendation if within limit
-            if [ $api_call_count -lt "$API_CALL_LIMIT" ]; then
+            if [ "$api_call_count" -lt "$API_CALL_LIMIT" ]; then
                 debug_log "Making API call for: $summary_line"
                 recommendation=$(get_fix_recommendation "$summary_line")
-                ((api_call_count++))
+                (( ++api_call_count ))
                 debug_log "api_call_count is now: $api_call_count"
             else
                 recommendation="⚠️ Recommendation unavailable: API rate limit reached ($API_CALL_LIMIT max per report)."
@@ -795,7 +795,7 @@ EOF
     } | sendmail "$email"
 
     sendmail_exit=$?
-    if [ $sendmail_exit -eq 0 ]; then
+    if [ "$sendmail_exit" -eq 0 ]; then
         debug_log "Aggregated email sent successfully"
         echo "✓ CHECKPOINT: Email sent successfully to $email" >&2
     else
