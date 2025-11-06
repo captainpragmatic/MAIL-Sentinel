@@ -531,9 +531,9 @@ if [ "$send_immediately" = false ] && (( ${#errors[@]} > 0 )); then
         ip_errors_severity["$ip"]="$severity"
 
         case "$severity" in
-            CRITICAL) ((critical_count++)) ;;
-            WARNING) ((warning_count++)) ;;
-            INFO) ((info_count++)) ;;
+            CRITICAL) (( ++critical_count )) ;;
+            WARNING) (( ++warning_count )) ;;
+            INFO) (( ++info_count )) ;;
         esac
     done
     echo "✓ CHECKPOINT: Severity categorization complete - Critical: $critical_count, Warning: $warning_count, Info: $info_count" >&2
