@@ -139,9 +139,75 @@ debug_log() {
     fi
 }
 
+# Build a plain-text automation summary for AI context
+build_automation_summary() {
+    local ip="$1"
+    local hostname="$2"
+    local error_count="$3"
+    local sample_msg="$4"
+
+    # Return empty if not an SSL/TLS error or automation is disabled
+    if [ "${ENABLE_SSL_AUTOMATION:-true}" != "true" ] || ! grep -qiE "SSL_accept|TLS" <<< "$sample_msg" 2>/dev/null; then
+        echo ""
+        return
+    fi
+
+    local summary=""
+
+    # Check 1: Known mail provider
+    local is_known provider
+    IFS='|' read -r is_known provider <<< "$(is_known_mail_provider "$hostname")"
+    if [ "$is_known" = "true" ]; then
+        summary+="Known provider: $provider. "
+    else
+        summary+="Unknown provider. "
+    fi
+
+    # Check 2: Certificate status
+    if [ "${ENABLE_CERT_CHECK:-true}" = "true" ]; then
+        local cert_status cert_date cert_days
+        IFS='|' read -r cert_status cert_date cert_days <<< "$(check_ssl_certificate)"
+        case "$cert_status" in
+            expired) summary+="Cert: EXPIRED. " ;;
+            expiring) summary+="Cert: Expiring in $cert_days days. " ;;
+            valid) summary+="Cert: Valid ($cert_days days left). " ;;
+            error) summary+="Cert: Unable to verify. " ;;
+        esac
+    fi
+
+    # Check 3: Successful TLS connections
+    if [ "${ENABLE_LOG_PATTERN_ANALYSIS:-true}" = "true" ]; then
+        local tls_success_count
+        tls_success_count=$(check_successful_tls_connections "$ip")
+        tls_success_count=${tls_success_count:-0}
+        if [ "$tls_success_count" -eq 0 ]; then
+            summary+="No successful TLS connections from other IPs. "
+        else
+            summary+="$tls_success_count successful TLS connections from other IPs. "
+        fi
+    fi
+
+    # Check 4: IP history
+    local has_history history_count
+    IFS='|' read -r has_history history_count <<< "$(check_ip_history "$ip")"
+    if [ "$has_history" = "true" ]; then
+        summary+="IP has $history_count successful delivery history. "
+    else
+        summary+="No delivery history. "
+    fi
+
+    # Check 5: Scanner confidence
+    local scanner_confidence
+    scanner_confidence=$(calculate_scanner_confidence "$ip" "$hostname" "$error_count" "$has_history")
+    summary+="Scanner probability: $scanner_confidence%."
+
+    echo "$summary"
+}
+
 # New function to call OpenAI API for recommendations with in-memory rate limiting and debug logging
 get_fix_recommendation() {
     local error_summary="$1"
+    local automation_context="${2:-}"  # Optional: automation telemetry summary
     debug_log "Entering get_fix_recommendation with summary: $error_summary"
 
     if ((__get_fix_recommendation_api_call_count >= API_CALL_LIMIT)); then
@@ -149,10 +215,17 @@ get_fix_recommendation() {
         echo "Recommendation unavailable: API rate limit reached."
         return
     fi
-    
+
     (( ++__get_fix_recommendation_api_call_count ))
 
-    local prompt="Summarize the following Postfix error in a concise bullet-point list with three recommendations on how to fix, prevent, or ignore it (max 200 words): \"$error_summary\"."
+    local prompt
+    if [ -n "$automation_context" ]; then
+        # Strategic prompt when automation data is available
+        prompt="Postfix error: \"$error_summary\". Automation analysis: $automation_context. Provide strategic insights beyond the automated checks (e.g., security implications, long-term fixes, monitoring strategies). Max 100 words."
+    else
+        # Standard prompt for non-automated errors
+        prompt="Summarize the following Postfix error in a concise bullet-point list with three recommendations on how to fix, prevent, or ignore it (max 100 words): \"$error_summary\"."
+    fi
 
     # Build a safe JSON payload using jq
     local payload
@@ -163,14 +236,14 @@ get_fix_recommendation() {
         payload=$(jq -n --arg model "$model" --arg prompt "$prompt" '{
                             model: $model,
                             messages: [{role: "user", content: $prompt}],
-                            max_completion_tokens: 200,
+                            max_completion_tokens: 100,
                             temperature: 0.4
                         }')
     else
         payload=$(jq -n --arg model "$model" --arg prompt "$prompt" '{
                             model: $model,
                             messages: [{role: "user", content: $prompt}],
-                            max_tokens: 200,
+                            max_tokens: 100,
                             temperature: 0.4
                         }')
     fi
@@ -1045,10 +1118,13 @@ EOF
                 fi
                 IFS='|' read -r hostname asn country <<< "$ip_intel"
 
+                # Build automation context summary for AI (if applicable)
+                automation_summary=$(build_automation_summary "$ip" "$hostname" "$count" "$sample_msg")
+
                 # Get AI recommendation if within limit
                 if [ "$api_call_count" -lt "$API_CALL_LIMIT" ]; then
                     debug_log "Making API call for: $summary_line"
-                    recommendation=$(get_fix_recommendation "$summary_line")
+                    recommendation=$(get_fix_recommendation "$summary_line" "$automation_summary")
                     (( ++api_call_count ))
                     debug_log "api_call_count is now: $api_call_count"
                 else
