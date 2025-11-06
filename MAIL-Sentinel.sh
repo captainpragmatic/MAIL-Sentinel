@@ -400,7 +400,7 @@ if [ "$send_immediately" = false ] && (( ${#errors[@]} > 0 )); then
     ip_counter=0
     echo "✓ CHECKPOINT: ip_counter initialized, entering loop..." >&2
     for ip in "${!ip_errors_count[@]}"; do
-        ((ip_counter++))
+        ((++ip_counter))
         echo "  → [$(date '+%H:%M:%S')] Processing IP $ip_counter/${#ip_errors_count[@]}: $ip" >&2
         count=${ip_errors_count[$ip]:-0}
         sample_msg=${ip_errors_sample[$ip]:-"No sample message"}
